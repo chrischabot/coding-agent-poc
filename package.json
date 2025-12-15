@@ -1,0 +1,32 @@
+{
+  "name": "coding-agent",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "coding-agent": "./bin/coding-agent"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir=dist --target=bun",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@opentui/core": "latest",
+    "@opentui/solid": "latest",
+    "ai": "^4.0.0",
+    "@ai-sdk/openai": "^1.0.0",
+    "yargs": "^17.7.2",
+    "zod": "^3.23.8",
+    "diff": "^7.0.0",
+    "turndown": "^7.2.0",
+    "solid-js": "^1.9.3",
+    "ulid": "^2.3.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/diff": "^6.0.0",
+    "@types/turndown": "^5.0.5",
+    "@types/yargs": "^17.0.33",
+    "typescript": "^5.7.2"
+  }
+}
