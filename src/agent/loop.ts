@@ -1,297 +1,321 @@
-import { generateText, type CoreMessage } from "ai";
-import * as readline from "readline";
-import { getFastModel, configureModels } from "../model/provider.js";
-import { toolRegistry } from "../tool/registry.js";
-import { assembleSystemPrompt, formatUserMessage } from "./prompt.js";
-import { updateMemory, validatePlan } from "./memory.js";
-import {
-  createEmptyWorkingMemory,
-  setCurrentTask,
-  addPlanItem,
-  type WorkingMemoryState,
-} from "../layer/working.js";
-import { SessionPersistence, type SessionInfo } from "../session/persistence.js";
-import type { ToolContext, ToolResult } from "../tool/tool.js";
-import { ulid } from "ulid";
+import { AnthropicProvider } from "../provider/anthropic"
+import { getTool, getAllToolSpecs } from "../tools/registry"
+import { PermissionChecker } from "../permission"
+import { estimateThreadTokens } from "../context"
+import { checkForCorrection, formatCorrectionMessage } from "./correction"
+import type { PermissionPromptFn, PermissionRule } from "../permission"
+import type { Message, ContentBlock, ToolContext, Thread, Usage, StopReason, SummaryBlock, ResourceKey } from "../core/types"
 
-/**
- * Options for the agent loop
- */
-export interface AgentLoopOptions {
-  sessionId: string;
-  initialTask?: string;
-  yoloMode: boolean;
-  fastModel: string;
-  deepModel: string;
-  signal: AbortSignal;
+const DEFAULT_CONTEXT_LIMIT = 150000
+const MESSAGES_TO_KEEP = 10
+const CORRECTION_CHECK_INTERVAL = 3
+
+export interface AgentCallbacks {
+  onText?: (text: string) => void
+  onToolStart?: (id: string, name: string, input: Record<string, unknown>) => void
+  onToolEnd?: (id: string, result: string, isError: boolean) => void
+  onPermissionRequest?: (
+    toolName: string,
+    input: Record<string, unknown>,
+    rule: PermissionRule
+  ) => Promise<boolean>
+  onPermissionDenied?: (toolName: string, reason: string) => void
+  onCourseCorrection?: (reason: string, suggestion: string) => void
+  onUsage?: (usage: Usage) => void
+  onMessageComplete?: (message: Message) => void
+  onTurnComplete?: () => void
 }
 
-/**
- * Main agent loop - THINK → ACT → OBSERVE → UPDATE
- */
-export async function agentLoop(options: AgentLoopOptions): Promise<void> {
-  // Configure models
-  configureModels({
-    fastModel: options.fastModel,
-    deepModel: options.deepModel,
-  });
+export interface AgentOptions {
+  model: string
+  systemPrompt: string
+  maxTurns?: number
+  maxTokens?: number
+  contextLimit?: number
+}
 
-  // Load or create session
-  let session = await SessionPersistence.load(options.sessionId);
-  let workingMemory: WorkingMemoryState;
-  let messages: CoreMessage[] = [];
+export class AgentLoop {
+  private provider: AnthropicProvider
+  private thread: Thread
+  private options: AgentOptions
+  private callbacks: AgentCallbacks
+  private abortController: AbortController | null = null
+  private permissionChecker: PermissionChecker
 
-  if (session) {
-    console.log(`Resuming session: ${options.sessionId}`);
-    workingMemory = session.workingMemory;
-    messages = session.messages;
-  } else {
-    console.log(`Starting new session: ${options.sessionId}`);
-    workingMemory = createEmptyWorkingMemory();
-    session = {
-      id: options.sessionId,
-      createdAt: Date.now(),
-      workingDirectory: process.cwd(),
-      fastModel: options.fastModel,
-      deepModel: options.deepModel,
-      workingMemory,
-      messages: [],
-      messageCount: 0,
-    };
+  constructor(
+    thread: Thread,
+    options: AgentOptions,
+    callbacks: AgentCallbacks = {}
+  ) {
+    this.provider = new AnthropicProvider()
+    this.thread = thread
+    this.options = options
+    this.callbacks = callbacks
+
+    const promptFn: PermissionPromptFn | null = callbacks.onPermissionRequest
+      ? (toolName, input, rule) => callbacks.onPermissionRequest!(toolName, input, rule)
+      : null
+    this.permissionChecker = new PermissionChecker([], promptFn)
   }
 
-  // Tool execution context
-  const toolContext: ToolContext = {
-    sessionId: options.sessionId,
-    messageId: "",
-    workingDirectory: process.cwd(),
-    yoloMode: options.yoloMode,
-  };
+  async run(userMessage: string): Promise<void> {
+    this.abortController = new AbortController()
 
-  // Handle initial task if provided
-  if (options.initialTask) {
-    workingMemory = setCurrentTask(workingMemory, options.initialTask);
-    messages.push({
+    this.addUserMessage(userMessage)
+
+    const maxTurns = this.options.maxTurns ?? 50
+    let turnCount = 0
+
+    while (turnCount < maxTurns) {
+      if (this.abortController.signal.aborted) break
+
+      turnCount++
+
+      if (turnCount > 1 && turnCount % CORRECTION_CHECK_INTERVAL === 0) {
+        this.checkAndApplyCorrection()
+      }
+
+      const continueLoop = await this.runTurn()
+
+      if (!continueLoop) break
+    }
+
+    this.callbacks.onTurnComplete?.()
+  }
+
+  abort(): void {
+    this.abortController?.abort()
+  }
+
+  private addUserMessage(text: string): void {
+    const message: Message = {
       role: "user",
-      content: formatUserMessage(options.initialTask, {
-        workingDirectory: process.cwd(),
-      }),
-    });
-    await saveSession(session, workingMemory, messages);
+      content: [{ type: "text", text }],
+    }
+    this.thread.messages.push(message)
   }
 
-  // Main loop
-  while (!options.signal.aborted) {
-    // Determine if we need user input
-    // We need input if: no messages, or last message was assistant text (not tool call)
-    const lastMessage = messages[messages.length - 1];
-    const needsUserInput = messages.length === 0 ||
-      (lastMessage?.role === "assistant" && typeof lastMessage.content === "string");
+  private async runTurn(): Promise<boolean> {
+    await this.compressContextIfNeeded()
 
-    if (needsUserInput) {
-      const userInput = await promptUser();
-      if (!userInput) {
-        console.log("\nGoodbye!");
-        break;
+    const content: ContentBlock[] = []
+    let stopReason: StopReason | undefined
+    const toolCalls: { id: string; name: string; input: Record<string, unknown> }[] = []
+
+    const tools = getAllToolSpecs()
+    const stream = this.provider.stream(
+      this.options.model,
+      this.options.systemPrompt,
+      this.thread.messages,
+      tools,
+      this.options.maxTokens
+    )
+
+    for await (const event of stream) {
+      if (this.abortController?.signal.aborted) break
+
+      if (event.type === "text" && event.text) {
+        this.callbacks.onText?.(event.text)
+        const lastBlock = content[content.length - 1]
+        if (lastBlock?.type === "text") {
+          lastBlock.text += event.text
+        } else {
+          content.push({ type: "text", text: event.text })
+        }
+      } else if (event.type === "tool_use" && event.toolUse) {
+        const { id, name, input } = event.toolUse
+        content.push({ type: "tool_use", id, name, input })
+        toolCalls.push({ id, name, input })
+        this.callbacks.onToolStart?.(id, name, input)
+      } else if (event.type === "usage" && event.usage) {
+        this.callbacks.onUsage?.(event.usage)
+      } else if (event.type === "stop" && event.stopReason) {
+        stopReason = event.stopReason
       }
-      if (userInput.toLowerCase() === "exit" || userInput.toLowerCase() === "quit") {
-        console.log("\nSession saved. Goodbye!");
-        break;
+    }
+
+    const assistantMessage: Message = {
+      role: "assistant",
+      content,
+      state: { type: "complete", stopReason },
+    }
+    this.thread.messages.push(assistantMessage)
+    this.callbacks.onMessageComplete?.(assistantMessage)
+
+    if (toolCalls.length === 0) {
+      return false
+    }
+
+    const toolResults = await this.executeToolsParallel(toolCalls)
+
+    const userMessage: Message = {
+      role: "user",
+      content: toolResults,
+    }
+    this.thread.messages.push(userMessage)
+
+    return true
+  }
+
+  private async executeToolsParallel(
+    toolCalls: { id: string; name: string; input: Record<string, unknown> }[]
+  ): Promise<ContentBlock[]> {
+    const context: ToolContext = {
+      workingDirectory: this.thread.workingDirectory,
+      threadId: this.thread.id,
+      signal: this.abortController?.signal,
+    }
+
+    // Group tools into batches based on resource conflicts
+    const batches = this.batchToolCallsByResources(toolCalls)
+    const allResults: { toolUseId: string; content: string; isError?: boolean }[] = []
+
+    // Execute batches sequentially, tools within batch in parallel
+    for (const batch of batches) {
+      const batchResults = await Promise.all(
+        batch.map(async ({ id, name, input }) => {
+          const tool = getTool(name)
+          if (!tool) {
+            const result = `Error: Unknown tool "${name}"`
+            this.callbacks.onToolEnd?.(id, result, true)
+            return { toolUseId: id, content: result, isError: true }
+          }
+
+          const permission = await this.permissionChecker.check(name, input)
+          if (!permission.permitted) {
+            const reason = permission.reason ?? "Permission denied"
+            this.callbacks.onPermissionDenied?.(name, reason)
+            this.callbacks.onToolEnd?.(id, reason, true)
+            return { toolUseId: id, content: `Error: ${reason}`, isError: true }
+          }
+
+          try {
+            const result = await tool.execute(input, context)
+            this.callbacks.onToolEnd?.(id, result.output, result.isError ?? false)
+            return {
+              toolUseId: id,
+              content: result.output,
+              isError: result.isError,
+            }
+          } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err)
+            this.callbacks.onToolEnd?.(id, errorMessage, true)
+            return { toolUseId: id, content: errorMessage, isError: true }
+          }
+        })
+      )
+      allResults.push(...batchResults)
+    }
+
+    return allResults.map((r) => ({
+      type: "tool_result" as const,
+      toolUseId: r.toolUseId,
+      content: r.content,
+      isError: r.isError,
+    }))
+  }
+
+  private batchToolCallsByResources(
+    toolCalls: { id: string; name: string; input: Record<string, unknown> }[]
+  ): { id: string; name: string; input: Record<string, unknown> }[][] {
+    if (toolCalls.length <= 1) {
+      return [toolCalls]
+    }
+
+    const toolsWithResources = toolCalls.map((tc) => {
+      const tool = getTool(tc.name)
+      const resourceKeys = tool?.executionProfile?.resourceKeys(tc.input) ?? []
+      return { ...tc, resourceKeys }
+    })
+
+    const batches: { id: string; name: string; input: Record<string, unknown> }[][] = []
+    const assigned = new Set<number>()
+
+    while (assigned.size < toolsWithResources.length) {
+      const batch: { id: string; name: string; input: Record<string, unknown> }[] = []
+      const batchResources: ResourceKey[] = []
+
+      for (let i = 0; i < toolsWithResources.length; i++) {
+        if (assigned.has(i)) continue
+
+        const tc = toolsWithResources[i]
+        if (this.canAddToBatch(tc.resourceKeys, batchResources)) {
+          batch.push({ id: tc.id, name: tc.name, input: tc.input })
+          batchResources.push(...tc.resourceKeys)
+          assigned.add(i)
+        }
       }
 
-      // Set as current task if no task yet
-      if (!workingMemory.currentTask) {
-        workingMemory = setCurrentTask(workingMemory, userInput);
+      if (batch.length > 0) {
+        batches.push(batch)
       }
+    }
 
-      messages.push({
+    return batches
+  }
+
+  private canAddToBatch(newKeys: ResourceKey[], existingKeys: ResourceKey[]): boolean {
+    for (const newKey of newKeys) {
+      for (const existing of existingKeys) {
+        if (newKey.key === existing.key) {
+          // Conflict if either is a write
+          if (newKey.mode === "write" || existing.mode === "write") {
+            return false
+          }
+        }
+      }
+    }
+    return true
+  }
+
+  getThread(): Thread {
+    return this.thread
+  }
+
+  private checkAndApplyCorrection(): void {
+    const result = checkForCorrection(this.thread.messages)
+
+    if (result.needsCorrection && result.reason && result.suggestion) {
+      this.callbacks.onCourseCorrection?.(result.reason, result.suggestion)
+
+      const correctionMessage: Message = {
         role: "user",
-        content: formatUserMessage(userInput, {
-          workingDirectory: process.cwd(),
-        }),
-      });
-    }
-
-    // THINK - Assemble prompt and call model
-    const systemPrompt = assembleSystemPrompt(workingMemory);
-    const aiTools = toolRegistry.toAITools(toolContext);
-
-    try {
-      console.log("\n🤔 Thinking...");
-
-      const result = await generateText({
-        model: getFastModel(),
-        system: systemPrompt,
-        messages,
-        tools: aiTools,
-        maxSteps: 1, // One step at a time for visibility
-      });
-
-      // Check for tool calls
-      if (result.toolCalls && result.toolCalls.length > 0) {
-        for (const toolCall of result.toolCalls) {
-          // ACT - Execute the tool
-          console.log(`\n⚡ Action: ${toolCall.toolName}`);
-          console.log(`   Args: ${JSON.stringify(toolCall.args, null, 2).slice(0, 200)}`);
-
-          // Update context with new message ID
-          toolContext.messageId = ulid();
-
-          const toolResult = await toolRegistry.execute(
-            toolCall.toolName,
-            toolCall.args,
-            toolContext
-          );
-
-          // OBSERVE - Display result
-          displayToolResult(toolCall.toolName, toolResult);
-
-          // UPDATE - Update working memory
-          workingMemory = await updateMemory(workingMemory, {
-            toolName: toolCall.toolName,
-            toolOutput: toolResult.output,
-            toolError: toolResult.error ?? false,
-            modelThinking: result.text,
-          });
-
-          // Add tool result to messages
-          messages.push({
-            role: "assistant",
-            content: [
-              { type: "text", text: result.text || "" },
-              {
-                type: "tool-call",
-                toolCallId: toolCall.toolCallId,
-                toolName: toolCall.toolName,
-                args: toolCall.args,
-              },
-            ],
-          });
-
-          messages.push({
-            role: "tool",
-            content: [
-              {
-                type: "tool-result",
-                toolCallId: toolCall.toolCallId,
-                toolName: toolCall.toolName,
-                result: JSON.stringify(toolResult),
-              },
-            ],
-          });
-        }
-
-        // Validate plan
-        const warnings = validatePlan(workingMemory);
-        for (const warning of warnings) {
-          console.log(`⚠️  ${warning}`);
-        }
-
-        // Save session after each step
-        await saveSession(session, workingMemory, messages);
-      } else {
-        // No tool call - this is a final response
-        console.log("\n📝 Response:");
-        console.log(result.text);
-
-        // Add to messages
-        messages.push({
-          role: "assistant",
-          content: result.text,
-        });
-
-        // Check if the response indicates completion
-        if (isTaskComplete(result.text)) {
-          workingMemory = {
-            ...workingMemory,
-            currentTask: "",
-            plan: [],
-          };
-        }
-
-        // Save session
-        await saveSession(session, workingMemory, messages);
+        content: [{ type: "text", text: formatCorrectionMessage(result) }],
       }
-    } catch (error) {
-      if (options.signal.aborted) {
-        break;
-      }
-      console.error("\n❌ Error:", error instanceof Error ? error.message : error);
-
-      // Don't exit on error, let the user continue
-      messages.push({
-        role: "assistant",
-        content: `Error occurred: ${error instanceof Error ? error.message : String(error)}`,
-      });
+      this.thread.messages.push(correctionMessage)
     }
   }
 
-  // Final save
-  await saveSession(session, workingMemory, messages);
-}
+  private async compressContextIfNeeded(): Promise<void> {
+    const contextLimit = this.options.contextLimit ?? DEFAULT_CONTEXT_LIMIT
+    const estimatedTokens = estimateThreadTokens(this.thread.messages)
 
-/**
- * Prompt the user for input
- */
-async function promptUser(): Promise<string> {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
+    if (estimatedTokens < contextLimit) {
+      return
+    }
 
-  return new Promise((resolve) => {
-    rl.question("\n> ", (answer) => {
-      rl.close();
-      resolve(answer.trim());
-    });
-  });
-}
+    const messageCount = this.thread.messages.length
+    if (messageCount <= MESSAGES_TO_KEEP) {
+      return
+    }
 
-/**
- * Display a tool result
- */
-function displayToolResult(toolName: string, result: ToolResult): void {
-  const icon = result.error ? "❌" : "✅";
-  console.log(`\n${icon} Result (${toolName}):`);
+    const messagesToSummarize = this.thread.messages.slice(0, messageCount - MESSAGES_TO_KEEP)
+    const messagesToKeep = this.thread.messages.slice(messageCount - MESSAGES_TO_KEEP)
 
-  // Truncate long output for display
-  const maxLines = 20;
-  const lines = result.output.split("\n");
-  if (lines.length > maxLines) {
-    console.log(lines.slice(0, maxLines).join("\n"));
-    console.log(`... (${lines.length - maxLines} more lines)`);
-  } else {
-    console.log(result.output);
+    const summary = await this.provider.summarize(messagesToSummarize, this.options.model)
+
+    const summaryBlock: SummaryBlock = {
+      type: "summary",
+      summary,
+      originalMessageCount: messagesToSummarize.length,
+    }
+
+    const summaryMessage: Message = {
+      role: "user",
+      content: [summaryBlock],
+    }
+
+    this.thread.messages = [summaryMessage, ...messagesToKeep]
+    this.callbacks.onText?.(`\n[Context compressed: ${messagesToSummarize.length} messages summarized]\n`)
   }
-}
-
-/**
- * Check if the response indicates task completion
- */
-function isTaskComplete(response: string): boolean {
-  const completionPhrases = [
-    "task is complete",
-    "task completed",
-    "all done",
-    "finished",
-    "completed successfully",
-    "implementation is complete",
-  ];
-
-  const lower = response.toLowerCase();
-  return completionPhrases.some((phrase) => lower.includes(phrase));
-}
-
-/**
- * Save session state
- */
-async function saveSession(
-  session: SessionInfo,
-  workingMemory: WorkingMemoryState,
-  messages: CoreMessage[]
-): Promise<void> {
-  session.workingMemory = workingMemory;
-  session.messages = messages;
-  session.messageCount = messages.length;
-  await SessionPersistence.save(session);
 }

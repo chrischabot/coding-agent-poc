@@ -1,5 +1,7 @@
 export {
-  SessionPersistence,
-  type SessionInfo,
-  type SessionSummary,
-} from "./persistence.js";
+  createThread,
+  saveThread,
+  loadThread,
+  listThreads,
+  getLatestThread,
+} from "./persistence"
