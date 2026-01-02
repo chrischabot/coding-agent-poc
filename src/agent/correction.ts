@@ -1,4 +1,4 @@
-import type { Message, ContentBlock, ToolResultBlock } from "../core/types"
+import type { Message } from "../core/types"
 
 export interface CorrectionResult {
   needsCorrection: boolean
@@ -7,22 +7,26 @@ export interface CorrectionResult {
 }
 
 interface ToolCall {
+  id: string
   name: string
   failed: boolean
 }
 
 function extractToolCalls(messages: Message[]): ToolCall[] {
   const calls: ToolCall[] = []
+  const callsById = new Map<string, ToolCall>()
 
   for (const msg of messages) {
     for (const block of msg.content) {
       if (block.type === "tool_use") {
-        calls.push({ name: block.name, failed: false })
+        const call = { id: block.id, name: block.name, failed: false }
+        calls.push(call)
+        callsById.set(block.id, call)
       }
       if (block.type === "tool_result" && block.isError) {
-        const lastCall = calls[calls.length - 1]
-        if (lastCall) {
-          lastCall.failed = true
+        const call = callsById.get(block.toolUseId)
+        if (call) {
+          call.failed = true
         }
       }
     }

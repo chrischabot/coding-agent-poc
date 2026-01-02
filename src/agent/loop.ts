@@ -7,6 +7,7 @@ import type { PermissionPromptFn, PermissionRule } from "../permission"
 import type { Message, ContentBlock, ToolContext, Thread, Usage, StopReason, SummaryBlock, ResourceKey } from "../core/types"
 
 const DEFAULT_CONTEXT_LIMIT = 150000
+const CONTEXT_COMPRESSION_THRESHOLD = 0.90
 const MESSAGES_TO_KEEP = 10
 const CORRECTION_CHECK_INTERVAL = 3
 
@@ -164,6 +165,11 @@ export class AgentLoop {
       workingDirectory: this.thread.workingDirectory,
       threadId: this.thread.id,
       signal: this.abortController?.signal,
+      model: this.options.model,
+      permissionCheck: async (toolName, input) => {
+        const permission = await this.permissionChecker.check(toolName, input)
+        return { permitted: permission.permitted, reason: permission.reason }
+      },
     }
 
     // Group tools into batches based on resource conflicts
@@ -288,9 +294,10 @@ export class AgentLoop {
 
   private async compressContextIfNeeded(): Promise<void> {
     const contextLimit = this.options.contextLimit ?? DEFAULT_CONTEXT_LIMIT
+    const compressionThreshold = contextLimit * CONTEXT_COMPRESSION_THRESHOLD
     const estimatedTokens = estimateThreadTokens(this.thread.messages)
 
-    if (estimatedTokens < contextLimit) {
+    if (estimatedTokens < compressionThreshold) {
       return
     }
 
@@ -301,6 +308,9 @@ export class AgentLoop {
 
     const messagesToSummarize = this.thread.messages.slice(0, messageCount - MESSAGES_TO_KEEP)
     const messagesToKeep = this.thread.messages.slice(messageCount - MESSAGES_TO_KEEP)
+
+    const percentUsed = Math.round((estimatedTokens / contextLimit) * 100)
+    this.callbacks.onText?.(`\n[Context at ${percentUsed}% - compressing ${messagesToSummarize.length} messages...]\n`)
 
     const summary = await this.provider.summarize(messagesToSummarize, this.options.model)
 
@@ -316,6 +326,9 @@ export class AgentLoop {
     }
 
     this.thread.messages = [summaryMessage, ...messagesToKeep]
-    this.callbacks.onText?.(`\n[Context compressed: ${messagesToSummarize.length} messages summarized]\n`)
+    
+    const newTokens = estimateThreadTokens(this.thread.messages)
+    const newPercent = Math.round((newTokens / contextLimit) * 100)
+    this.callbacks.onText?.(`[Context compressed to ${newPercent}%]\n`)
   }
 }

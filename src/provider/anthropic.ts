@@ -100,6 +100,8 @@ export class AnthropicProvider {
     let currentToolId = ""
     let currentToolName = ""
     let currentToolInput = ""
+    let pendingInputTokens = 0
+    let usageEmitted = false
 
     for await (const event of stream) {
       if (event.type === "content_block_start") {
@@ -131,14 +133,15 @@ export class AnthropicProvider {
           currentToolInput = ""
         }
       } else if (event.type === "message_delta") {
-        if (event.usage) {
+        if (event.usage && !usageEmitted) {
           yield {
             type: "usage",
             usage: {
-              inputTokens: 0,
+              inputTokens: pendingInputTokens,
               outputTokens: event.usage.output_tokens,
             },
           }
+          usageEmitted = true
         }
         if (event.delta.stop_reason) {
           yield {
@@ -148,19 +151,23 @@ export class AnthropicProvider {
         }
       } else if (event.type === "message_start") {
         if (event.message.usage) {
-          yield {
-            type: "usage",
-            usage: {
-              inputTokens: event.message.usage.input_tokens,
-              outputTokens: event.message.usage.output_tokens,
-            },
+          pendingInputTokens = event.message.usage.input_tokens
+          if (event.message.usage.output_tokens > 0 && !usageEmitted) {
+            yield {
+              type: "usage",
+              usage: {
+                inputTokens: pendingInputTokens,
+                outputTokens: event.message.usage.output_tokens,
+              },
+            }
+            usageEmitted = true
           }
         }
       }
     }
   }
 
-  async summarize(messages: Message[], model: string = "claude-sonnet-4-20250514"): Promise<string> {
+  async summarize(messages: Message[], model: string = "claude-opus-4-5-20251101"): Promise<string> {
     const conversationText = messages
       .map((m) => {
         const role = m.role.toUpperCase()

@@ -15,7 +15,7 @@ async function main() {
     .option("model", {
       alias: "m",
       type: "string",
-      default: "claude-sonnet-4-20250514",
+      default: "claude-opus-4-5-20251101",
       description: "Model to use",
     })
     .option("workdir", {
@@ -78,7 +78,7 @@ async function main() {
     console.log("  --interactive, -i  Start interactive mode (readline)")
     console.log("  --tui, -t          Start TUI mode (OpenTUI interface)")
     console.log("  --debug, -d        Debug mode (verbose output)")
-    console.log("  --model, -m        Model to use (default: claude-sonnet-4-20250514)")
+    console.log("  --model, -m        Model to use (default: claude-opus-4-5-20251101)")
     console.log("  --workdir, -w      Working directory")
   }
 }

@@ -1,5 +1,5 @@
 import { AnthropicProvider } from "../provider/anthropic"
-import type { Message, ContentBlock, ToolContext, Tool, ToolSpec, StopReason } from "../core/types"
+import type { Message, ContentBlock, ToolContext, Tool, StopReason, ResourceKey } from "../core/types"
 import type { SubagentConfig, SubagentResult, SubagentContext } from "./types"
 
 /**
@@ -7,7 +7,7 @@ import type { SubagentConfig, SubagentResult, SubagentContext } from "./types"
  * 
  * Key differences from main AgentLoop:
  * - Limited tool access (subset of main tools)
- * - No permission prompting (inherits parent permissions)
+ * - No direct permission prompting (can use parent permissionCheck if provided)
  * - No context compression (short-lived)
  * - No course correction
  * - Returns final text output to parent
@@ -33,6 +33,7 @@ export class SubagentRunner {
     let turns = 0
     let totalToolCalls = 0
     let finalOutput = ""
+    let hadError = false
 
     while (turns < this.config.maxTurns) {
       turns++
@@ -57,6 +58,9 @@ export class SubagentRunner {
       }
 
       const toolResults = await this.executeTools(toolCalls)
+      if (toolResults.some((block) => block.type === "tool_result" && block.isError)) {
+        hadError = true
+      }
       const userMessage: Message = {
         role: "user",
         content: toolResults,
@@ -66,7 +70,7 @@ export class SubagentRunner {
 
     return {
       output: finalOutput,
-      isError: false,
+      isError: hadError,
       toolCalls: totalToolCalls,
       turns,
     }
@@ -117,28 +121,47 @@ export class SubagentRunner {
       workingDirectory: this.context.workingDirectory,
       threadId: this.context.parentThreadId,
       signal: this.context.signal,
+      model: this.context.model,
+      permissionCheck: this.context.permissionCheck,
     }
 
-    const results = await Promise.all(
-      toolCalls.map(async ({ id, name, input }) => {
-        const tool = this.toolMap.get(name)
-        if (!tool) {
-          return { toolUseId: id, content: `Error: Unknown tool "${name}"`, isError: true }
-        }
+    const batches = this.batchToolCallsByResources(toolCalls)
+    const results: { toolUseId: string; content: string; isError?: boolean }[] = []
 
-        try {
-          const result = await tool.execute(input, toolContext)
-          return {
-            toolUseId: id,
-            content: result.output,
-            isError: result.isError,
+    for (const batch of batches) {
+      const batchResults = await Promise.all(
+        batch.map(async ({ id, name, input }) => {
+          const tool = this.toolMap.get(name)
+          if (!tool) {
+            return { toolUseId: id, content: `Error: Unknown tool "${name}"`, isError: true }
           }
-        } catch (err) {
-          const errorMessage = err instanceof Error ? err.message : String(err)
-          return { toolUseId: id, content: errorMessage, isError: true }
-        }
-      })
-    )
+
+          if (this.context.permissionCheck) {
+            const permission = await this.context.permissionCheck(name, input)
+            if (!permission.permitted) {
+              return {
+                toolUseId: id,
+                content: `Error: ${permission.reason ?? "Permission denied"}`,
+                isError: true,
+              }
+            }
+          }
+
+          try {
+            const result = await tool.execute(input, toolContext)
+            return {
+              toolUseId: id,
+              content: result.output,
+              isError: result.isError,
+            }
+          } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err)
+            return { toolUseId: id, content: errorMessage, isError: true }
+          }
+        })
+      )
+      results.push(...batchResults)
+    }
 
     return results.map(r => ({
       type: "tool_result" as const,
@@ -146,5 +169,57 @@ export class SubagentRunner {
       content: r.content,
       isError: r.isError,
     }))
+  }
+
+  private batchToolCallsByResources(
+    toolCalls: { id: string; name: string; input: Record<string, unknown> }[]
+  ): { id: string; name: string; input: Record<string, unknown> }[][] {
+    if (toolCalls.length <= 1) {
+      return [toolCalls]
+    }
+
+    const toolsWithResources = toolCalls.map((tc) => {
+      const tool = this.toolMap.get(tc.name)
+      const resourceKeys = tool?.executionProfile?.resourceKeys(tc.input) ?? []
+      return { ...tc, resourceKeys }
+    })
+
+    const batches: { id: string; name: string; input: Record<string, unknown> }[][] = []
+    const assigned = new Set<number>()
+
+    while (assigned.size < toolsWithResources.length) {
+      const batch: { id: string; name: string; input: Record<string, unknown> }[] = []
+      const batchResources: ResourceKey[] = []
+
+      for (let i = 0; i < toolsWithResources.length; i++) {
+        if (assigned.has(i)) continue
+
+        const tc = toolsWithResources[i]
+        if (this.canAddToBatch(tc.resourceKeys, batchResources)) {
+          batch.push({ id: tc.id, name: tc.name, input: tc.input })
+          batchResources.push(...tc.resourceKeys)
+          assigned.add(i)
+        }
+      }
+
+      if (batch.length > 0) {
+        batches.push(batch)
+      }
+    }
+
+    return batches
+  }
+
+  private canAddToBatch(newKeys: ResourceKey[], existingKeys: ResourceKey[]): boolean {
+    for (const newKey of newKeys) {
+      for (const existing of existingKeys) {
+        if (newKey.key === existing.key) {
+          if (newKey.mode === "write" || existing.mode === "write") {
+            return false
+          }
+        }
+      }
+    }
+    return true
   }
 }

@@ -164,7 +164,7 @@ Your role is to make targeted changes to the files you're given based on the tra
 Key responsibilities:
 - Read and understand the target files
 - Apply the necessary transformations
-- Use edit_file for precise changes
+- Use Edit for precise changes
 - Maintain code quality and formatting
 
 Guidelines:

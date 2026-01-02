@@ -11,7 +11,7 @@ import {
 } from "../subagent"
 import type { SubagentContext } from "../subagent"
 
-const DEFAULT_MODEL = "claude-sonnet-4-20250514"
+const DEFAULT_MODEL = "claude-opus-4-5-20251101"
 
 export const taskTool: Tool = {
   spec: {
@@ -50,13 +50,16 @@ Write detailed, specific prompts with context and acceptance criteria.`,
   async execute(input, context): Promise<ToolResult> {
     const prompt = input.prompt as string
     const description = input.description as string
+    const model = context.model ?? DEFAULT_MODEL
 
-    const config = createTaskConfig(DEFAULT_MODEL)
+    const config = createTaskConfig(model)
     const subagentContext: SubagentContext = {
       workingDirectory: context.workingDirectory,
       threadId: context.threadId,
       parentThreadId: context.threadId,
       signal: context.signal,
+      model: context.model,
+      permissionCheck: context.permissionCheck,
     }
 
     const runner = new SubagentRunner(config, subagentContext)
@@ -104,13 +107,16 @@ WHEN NOT TO USE:
   },
   async execute(input, context): Promise<ToolResult> {
     const query = input.query as string
+    const model = context.model ?? DEFAULT_MODEL
 
-    const config = createFinderConfig(DEFAULT_MODEL)
+    const config = createFinderConfig(model)
     const subagentContext: SubagentContext = {
       workingDirectory: context.workingDirectory,
       threadId: context.threadId,
       parentThreadId: context.threadId,
       signal: context.signal,
+      model: context.model,
+      permissionCheck: context.permissionCheck,
     }
 
     const runner = new SubagentRunner(config, subagentContext)
@@ -170,6 +176,7 @@ WHEN NOT TO USE:
     const task = input.task as string
     const additionalContext = input.context as string | undefined
     const files = input.files as string[] | undefined
+    const model = context.model ?? DEFAULT_MODEL
 
     let prompt = task
     if (additionalContext) {
@@ -179,12 +186,14 @@ WHEN NOT TO USE:
       prompt = `${prompt}\n\nRelevant files to examine: ${files.join(", ")}`
     }
 
-    const config = createOracleConfig(DEFAULT_MODEL)
+    const config = createOracleConfig(model)
     const subagentContext: SubagentContext = {
       workingDirectory: context.workingDirectory,
       threadId: context.threadId,
       parentThreadId: context.threadId,
       signal: context.signal,
+      model: context.model,
+      permissionCheck: context.permissionCheck,
     }
 
     const runner = new SubagentRunner(config, subagentContext)
@@ -238,13 +247,16 @@ WHEN NOT TO USE:
   async execute(input, context): Promise<ToolResult> {
     const prompt = input.prompt as string
     const description = input.description as string
+    const model = context.model ?? DEFAULT_MODEL
 
-    const config = createPainterConfig(DEFAULT_MODEL)
+    const config = createPainterConfig(model)
     const subagentContext: SubagentContext = {
       workingDirectory: context.workingDirectory,
       threadId: context.threadId,
       parentThreadId: context.threadId,
       signal: context.signal,
+      model: context.model,
+      permissionCheck: context.permissionCheck,
     }
 
     const runner = new SubagentRunner(config, subagentContext)
@@ -298,18 +310,21 @@ WHEN NOT TO USE:
   async execute(input, context): Promise<ToolResult> {
     const query = input.query as string
     const additionalContext = input.context as string | undefined
+    const model = context.model ?? DEFAULT_MODEL
 
     let prompt = query
     if (additionalContext) {
       prompt = `${query}\n\nContext: ${additionalContext}`
     }
 
-    const config = createLibrarianConfig(DEFAULT_MODEL)
+    const config = createLibrarianConfig(model)
     const subagentContext: SubagentContext = {
       workingDirectory: context.workingDirectory,
       threadId: context.threadId,
       parentThreadId: context.threadId,
       signal: context.signal,
+      model: context.model,
+      permissionCheck: context.permissionCheck,
     }
 
     const runner = new SubagentRunner(config, subagentContext)
@@ -366,13 +381,16 @@ The Kraken operates in two phases:
   async execute(input, context): Promise<ToolResult> {
     const objective = input.objective as string
     const scope = input.scope as string | undefined
+    const model = context.model ?? DEFAULT_MODEL
 
-    const scopeConfig = createKrakenScopeConfig(DEFAULT_MODEL)
+    const scopeConfig = createKrakenScopeConfig(model)
     const subagentContext: SubagentContext = {
       workingDirectory: context.workingDirectory,
       threadId: context.threadId,
       parentThreadId: context.threadId,
       signal: context.signal,
+      model: context.model,
+      permissionCheck: context.permissionCheck,
     }
 
     const scopeRunner = new SubagentRunner(scopeConfig, subagentContext)
@@ -392,11 +410,27 @@ The Kraken operates in two phases:
         }
       }
 
-      const filePaths = scopeResult.output
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line.startsWith("/") || line.match(/^[a-zA-Z]:\\/))
-        .map((line) => line.split(" - ")[0].trim())
+      const filePaths = Array.from(
+        new Set(
+          scopeResult.output
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line) => line.replace(/^[-*]\s+/, "").trim())
+            .map((line) => line.split(" - ")[0].trim())
+            .filter((path) => {
+              if (!path) return false
+              return (
+                path.startsWith("/") ||
+                path.startsWith(".") ||
+                /^[a-zA-Z]:\\/.test(path) ||
+                path.includes("/") ||
+                path.includes("\\") ||
+                /^[^\s]+\.[^\s]+$/.test(path)
+              )
+            })
+        )
+      )
 
       if (filePaths.length === 0) {
         return {
@@ -405,7 +439,7 @@ The Kraken operates in two phases:
         }
       }
 
-      const execConfig = createKrakenExecutorConfig(DEFAULT_MODEL)
+      const execConfig = createKrakenExecutorConfig(model)
       const execRunner = new SubagentRunner(execConfig, subagentContext)
 
       const execPrompt = `Apply this transformation: ${objective}

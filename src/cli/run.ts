@@ -3,8 +3,11 @@ import { registerBuiltinTools } from "../tools"
 import { buildSystemPrompt } from "../prompt/system"
 import { discoverGuidanceFiles, formatGuidanceFiles } from "../prompt/guidance"
 import { createThread, saveThread } from "../session/persistence"
+import { estimateThreadTokens } from "../context/tokens"
 import { startTUI, getTUIController } from "../ui"
 import type { PermissionRule } from "../permission"
+
+const DEFAULT_CONTEXT_LIMIT = 150000
 
 export interface RunOptions {
   prompt?: string
@@ -33,7 +36,7 @@ async function promptForPermission(
 
 export async function runAgent(options: RunOptions): Promise<void> {
   const workingDirectory = options.workdir ?? process.cwd()
-  const model = options.model ?? "claude-sonnet-4-20250514"
+  const model = options.model ?? "claude-opus-4-5-20251101"
   const debugMode = options.debug ?? false
 
   registerBuiltinTools()
@@ -115,7 +118,7 @@ export async function runAgent(options: RunOptions): Promise<void> {
 export async function runInteractive(options: RunOptions): Promise<void> {
   const readline = await import("node:readline")
   const workingDirectory = options.workdir ?? process.cwd()
-  const model = options.model ?? "claude-sonnet-4-20250514"
+  const model = options.model ?? "claude-opus-4-5-20251101"
 
   registerBuiltinTools()
 
@@ -189,7 +192,7 @@ export async function runInteractive(options: RunOptions): Promise<void> {
 
 export async function runTUI(options: RunOptions): Promise<void> {
   const workingDirectory = options.workdir ?? process.cwd()
-  const model = options.model ?? "claude-sonnet-4-20250514"
+  const model = options.model ?? "claude-opus-4-5-20251101"
 
   registerBuiltinTools()
 
@@ -199,6 +202,14 @@ export async function runTUI(options: RunOptions): Promise<void> {
   const thread = createThread(workingDirectory)
 
   let agent: AgentLoop | null = null
+  let totalInputTokens = 0
+  let totalOutputTokens = 0
+
+  const updateTokenDisplay = (controller: ReturnType<typeof getTUIController>) => {
+    if (!controller) return
+    const contextUsed = estimateThreadTokens(thread.messages)
+    controller.setTokenUsage(totalInputTokens, totalOutputTokens, contextUsed, DEFAULT_CONTEXT_LIMIT)
+  }
 
   const handleSubmit = async (input: string) => {
     const controller = getTUIController()
@@ -209,7 +220,7 @@ export async function runTUI(options: RunOptions): Promise<void> {
     if (!agent) {
       agent = new AgentLoop(
         thread,
-        { model, systemPrompt },
+        { model, systemPrompt, contextLimit: DEFAULT_CONTEXT_LIMIT },
         {
           onText: (text) => {
             controller.addText(text)
@@ -221,13 +232,23 @@ export async function runTUI(options: RunOptions): Promise<void> {
             controller.addToolEnd(result, isError)
           },
           onPermissionRequest: async (toolName, _input, _rule) => {
+            if (options.yolo) {
+              controller.addText(`\n[PERMISSION] ${toolName} auto-approved (yolo mode)\n`)
+              return true
+            }
             controller.addText(`\n[PERMISSION] ${toolName} requires approval - auto-rejecting in TUI mode\n`)
             return false
           },
           onPermissionDenied: (toolName, reason) => {
             controller.addText(`\n[PERMISSION] ${toolName} denied: ${reason}\n`)
           },
+          onUsage: (usage) => {
+            totalInputTokens += usage.inputTokens
+            totalOutputTokens += usage.outputTokens
+            updateTokenDisplay(controller)
+          },
           onTurnComplete: () => {
+            updateTokenDisplay(controller)
             controller.setProcessing(false)
           },
         }
@@ -243,5 +264,16 @@ export async function runTUI(options: RunOptions): Promise<void> {
     }
   }
 
-  await startTUI(handleSubmit)
+  try {
+    await startTUI(handleSubmit, {
+      workingDirectory,
+      model,
+      yoloMode: options.yolo,
+    })
+  } catch {
+    console.log("\x1b[33m⚠ TUI mode unavailable (OpenTUI rendering error)\x1b[0m")
+    console.log("\x1b[33m  Falling back to interactive mode...\x1b[0m")
+    console.log("")
+    await runInteractive(options)
+  }
 }

@@ -72,6 +72,11 @@ export interface ToolContext {
   workingDirectory: string
   threadId: string
   signal?: AbortSignal
+  model?: string
+  permissionCheck?: (
+    toolName: string,
+    input: Record<string, unknown>
+  ) => Promise<{ permitted: boolean; reason?: string }>
 }
 
 export interface ToolResult {
@@ -108,7 +113,7 @@ export interface Usage {
 
 export interface AgentConfig {
   model: string
-  provider: "anthropic" | "openai"
+  provider: "anthropic"
   workingDirectory: string
   maxTokens?: number
   debugMode?: boolean

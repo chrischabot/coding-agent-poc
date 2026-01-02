@@ -8,7 +8,7 @@ A coding agent CLI to study how AI coding assistants work. Built with Bun, TypeS
 # Install dependencies
 bun install
 
-# Run tests (153 unit tests)
+# Run tests
 bun test
 
 # Type check
@@ -27,12 +27,23 @@ bun run src/index.ts --interactive
 bun run src/index.ts --tui
 ```
 
+## Top-Level Layout
+
+- `bin/` - Bun entrypoint (`coding-agent` shim)
+- `dist/` - build output (generated)
+- `scripts/` - local dev/TUI test scripts
+- `src/` - main application source
+- `tests/` - bun:test suite
+- `opencode/`, `opentui/` - vendored upstream repos used for local reference; not imported by `src/`
+- `node_modules/` - dependencies (generated)
+
 ## Project Structure
 
 ```
 src/
 ├── index.ts              # CLI entry point (yargs-based)
 ├── core/
+│   ├── index.ts          # Core type exports
 │   └── types.ts          # All type definitions (Thread, Message, Tool, etc.)
 ├── tools/
 │   ├── registry.ts       # Tool registration and lookup
@@ -51,7 +62,8 @@ src/
 │   ├── github.ts         # GitHub API tools
 │   ├── look-at.ts        # Image/PDF analysis tool
 │   ├── mermaid.ts        # Diagram rendering tool
-│   └── thread.ts         # ReadThread for conversation history
+│   ├── thread.ts         # ReadThread for conversation history
+│   └── index.ts          # Tool registration and re-exports
 ├── subagent/
 │   ├── types.ts          # Subagent type definitions
 │   ├── runner.ts         # SubagentRunner class (nested agent loop)
@@ -62,24 +74,31 @@ src/
 │   ├── discovery.ts      # Skill discovery from .agents/skills/
 │   └── index.ts          # Skill exports
 ├── context/
+│   ├── index.ts          # Context exports
 │   ├── tokens.ts         # Token estimation
 │   └── file-state.ts     # File modification tracking
 ├── permission/
 │   ├── types.ts          # Permission types
 │   ├── rules.ts          # Built-in permission rules
-│   └── checker.ts        # Permission evaluation
+│   ├── checker.ts        # Permission evaluation
+│   └── index.ts          # Permission exports
 ├── provider/
-│   └── anthropic.ts      # Claude API with streaming
+│   ├── anthropic.ts      # Claude API with streaming
+│   └── index.ts          # Provider exports
 ├── agent/
 │   ├── loop.ts           # THINK-ACT-OBSERVE cycle, parallel execution
-│   └── correction.ts     # Course correction detection
+│   ├── correction.ts     # Course correction detection
+│   └── index.ts          # Agent exports
 ├── prompt/
 │   ├── system.ts         # Dynamic system prompt builder
-│   └── guidance.ts       # AGENTS.md discovery
+│   ├── guidance.ts       # AGENTS.md discovery
+│   └── index.ts          # Prompt exports
 ├── session/
-│   └── persistence.ts    # Thread save/load
+│   ├── persistence.ts    # Thread save/load
+│   └── index.ts          # Session exports
 ├── cli/
-│   └── run.ts            # Run modes (prompt, interactive, tui)
+│   ├── run.ts            # Run modes (prompt, interactive, tui)
+│   └── index.ts          # CLI exports
 └── ui/
     ├── App.tsx           # OpenTUI React TUI component
     └── index.ts          # UI exports
@@ -119,6 +138,12 @@ tests/
 8. If stop_reason === "end_turn", done
 ```
 
+### System Prompt Assembly
+
+- `buildSystemPrompt` injects environment info, tool list, and core rules
+- `AGENTS.md` or `CLAUDE.md` (prefers `AGENTS.md`) is embedded as `<guidance_file>`
+- Discovered skills are embedded as `<discovered_skills>` blocks (see Skill System)
+
 ### Tool Execution Profiles
 
 Tools can declare resource locks for safe parallel execution:
@@ -131,6 +156,7 @@ executionProfile: {
 
 - Multiple **read** locks on the same resource can run in parallel
 - **Write** locks serialize access (no concurrent writes to same file)
+- Resource keys use the raw `path` input (not normalized), so mixing absolute and relative paths can bypass conflict detection
 
 ### File State Tracking
 
@@ -211,6 +237,23 @@ The system tracks file mtimes to detect external modifications:
 | GetGitHubDiff | Get diff between refs |
 | FindGitHubFiles | Find files by pattern |
 
+Note: `registerBuiltinTools()` must run before building the system prompt or starting an agent loop so tool specs are available.
+
+### Tool Behavior Notes
+
+- `Read`: `offset` is 0-based, output line numbers are 1-based; default limit 2000 lines
+- `Edit`: exact, unique match required; `create_if_missing` only works with `old_str=""`
+- `Write`: overwrites existing files; creates parent directories
+- `Delete`: requires `recursive: true` for directories
+- `Grep`/`Glob`: rely on `rg`; results capped (default 100); `Glob` order is not guaranteed
+- `Bash`: non-interactive shell, 120s default timeout, output truncated to last 100k chars; use `cwd`
+- `WebFetch`: 30s timeout; HTML stripped unless `raw`; output truncated to 10k chars
+- `WebSearch`: uses `TAVILY_API_KEY` or `SERPER_API_KEY`, falls back to DuckDuckGo
+- GitHub tools: use `gh` CLI and require GitHub auth
+- `TodoWrite`/`TodoRead`: in-memory per process (cleared on exit)
+- `LookAt`: returns base64 for images/PDFs (no vision model analysis)
+- `Mermaid`: requires `mmdc` from `@mermaid-js/mermaid-cli`
+
 ## Subagent System
 
 Subagents run in isolated loops with limited tool access:
@@ -260,6 +303,11 @@ Skills are markdown files discovered from:
 3. `~/.claude/skills/` (global)
 4. `~/.claude/plugins/cache/` (global plugins)
 
+Parsing notes:
+- Frontmatter parsing is minimal (simple `key: value` lines only)
+- Supported keys: `name`, `description`, `tags`, `isolatedContext`
+- Skills are deduped by name, preferring local dirs before global ones
+
 ### Skill Format
 
 ```markdown
@@ -294,6 +342,13 @@ Actions:
 - `ask` - Prompt user for approval
 - `reject` - Block execution
 
+## Runtime Modes & Permissions
+
+- `--prompt` (non-interactive): `ask` rules auto-deny unless `--yolo` is set
+- `--interactive`: `ask` rules prompt via readline
+- `--tui`: `ask` rules auto-reject (TUI does not prompt)
+- Rule matching is glob-based and case-insensitive; custom rules are evaluated before built-ins
+
 ## Context Management
 
 ### Token Tracking
@@ -303,24 +358,38 @@ Estimates tokens from text length (chars / 4) to manage context window.
 ### Auto-Summarization
 
 When context exceeds limit:
-1. Keep last N messages
-2. Summarize older messages
-3. Replace with summary block
+1. Keep last 10 messages (default)
+2. Summarize older messages via the Anthropic provider
+3. Replace with a single `summary` content block
+
+Defaults:
+- Context limit: ~150k estimated tokens
 
 ### Course Correction
 
 Detects repeated failures or loops and injects correction messages.
+Triggered every 3 turns, including:
+- Repeated failures of the same tool
+- Consecutive failures across tools
+- Repeating tool-call patterns
 
 ## Session Persistence
 
 Threads persist to `~/.coding-agent/sessions/{thread-id}.json`.
+Active threads are cached in-memory so tools like `ReadPlan`/`EditPlan` and `ReadArtifact`/`EditArtifact` can access the current thread before it is saved to disk.
 
 ```typescript
 createThread(workingDirectory: string): Thread
 saveThread(thread: Thread): Promise<void>
-loadThread(threadId: string): Promise<Thread>
-listSessions(): Promise<string[]>
+loadThread(threadId: string): Promise<Thread | null>
+listThreads(): Promise<{ id: string; title?: string; updatedAt: number }[]>
+getLatestThread(): Promise<Thread | null>
 ```
+
+Runtime behavior:
+- `--prompt`: saves the thread after the run completes
+- `--interactive`: saves the thread on exit
+- `--tui`: saves after each submitted prompt
 
 ## Adding a New Tool
 
@@ -392,13 +461,22 @@ bun run src/index.ts --prompt "task" --model claude-sonnet-4-20250514
 bun run src/index.ts --prompt "task" --yolo
 ```
 
+Notes:
+- `--debug` streams text and tool previews; without it, only the final assistant text is printed
+- `--yolo` only affects non-interactive runs; TUI still auto-rejects permission prompts
+
 ## Environment
 
 - **Runtime**: Bun
 - **Language**: TypeScript (strict)
 - **Model**: Claude Sonnet 4 (claude-sonnet-4-20250514)
 - **API**: Anthropic SDK with streaming
-- **Testing**: bun:test (153 tests)
+- **Testing**: bun:test
+
+## Environment Variables
+
+- `ANTHROPIC_API_KEY` - required to run the agent
+- `TAVILY_API_KEY` / `SERPER_API_KEY` - optional, improves `WebSearch`
 
 ## Dependencies
 
@@ -406,5 +484,6 @@ bun run src/index.ts --prompt "task" --yolo
 - `yargs` - CLI argument parsing
 - `zod` - Schema validation
 - `ulid` - Thread ID generation
+- `react` - TUI component model
 - `@opentui/react` - Terminal UI
 - `@opentui/core` - Terminal UI core

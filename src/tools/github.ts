@@ -308,12 +308,27 @@ Use this to discover what files exist in a remote repository.`,
     const pattern = input.pattern as string
     const ref = input.ref as string | undefined
 
-    const args = ["api", `repos/${repo}/git/trees/${ref ?? "HEAD"}`, "-q", ".tree[].path"]
+    const args = [
+      "api",
+      `repos/${repo}/git/trees/${ref ?? "HEAD"}`,
+      "-f",
+      "recursive=1",
+      "-q",
+      ".tree[].path",
+    ]
 
     const result = await runGhCommand(args)
 
     if (result.code !== 0) {
-      const treeArgs = ["api", `repos/${repo}/git/trees/main`, "-q", ".tree[].path", "--paginate"]
+      const treeArgs = [
+        "api",
+        "repos/" + repo + "/git/trees/main",
+        "-f",
+        "recursive=1",
+        "-q",
+        ".tree[].path",
+        "--paginate",
+      ]
       const fallbackResult = await runGhCommand(treeArgs)
 
       if (fallbackResult.code !== 0) {
@@ -344,15 +359,15 @@ Use this to discover what files exist in a remote repository.`,
 }
 
 function filterByPattern(files: string[], pattern: string): string[] {
-  const regex = new RegExp(
-    "^" +
-      pattern
-        .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-        .replace(/\*\*/g, ".*")
-        .replace(/\*/g, "[^/]*")
-        .replace(/\?/g, ".") +
-      "$"
-  )
+  const doubleStarToken = "__DOUBLE_STAR__"
+  const escaped = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*/g, doubleStarToken)
+    .replace(/\*/g, "[^/]*")
+    .replace(/\?/g, ".")
+    .replace(new RegExp(doubleStarToken, "g"), ".*")
+
+  const regex = new RegExp("^" + escaped + "$")
 
   return files.filter((f) => regex.test(f))
 }

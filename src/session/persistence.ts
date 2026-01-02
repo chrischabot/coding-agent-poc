@@ -5,6 +5,7 @@ import { ulid } from "ulid"
 import type { Thread, Message } from "../core/types"
 
 const SESSION_DIR = join(homedir(), ".coding-agent", "sessions")
+const threadCache = new Map<string, Thread>()
 
 export async function ensureSessionDir(): Promise<void> {
   await mkdir(SESSION_DIR, { recursive: true })
@@ -13,7 +14,7 @@ export async function ensureSessionDir(): Promise<void> {
 export function createThread(workingDirectory: string): Thread {
   const id = `T-${ulid()}`
   const now = Date.now()
-  return {
+  const thread: Thread = {
     id,
     version: 1,
     createdAt: now,
@@ -21,6 +22,8 @@ export function createThread(workingDirectory: string): Thread {
     messages: [],
     workingDirectory,
   }
+  threadCache.set(id, thread)
+  return thread
 }
 
 export async function saveThread(thread: Thread): Promise<void> {
@@ -28,13 +31,21 @@ export async function saveThread(thread: Thread): Promise<void> {
   const filePath = join(SESSION_DIR, `${thread.id}.json`)
   thread.updatedAt = Date.now()
   await writeFile(filePath, JSON.stringify(thread, null, 2), "utf-8")
+  threadCache.set(thread.id, thread)
 }
 
 export async function loadThread(threadId: string): Promise<Thread | null> {
+  const cached = threadCache.get(threadId)
+  if (cached) {
+    return cached
+  }
+
   try {
     const filePath = join(SESSION_DIR, `${threadId}.json`)
     const content = await readFile(filePath, "utf-8")
-    return JSON.parse(content) as Thread
+    const thread = JSON.parse(content) as Thread
+    threadCache.set(threadId, thread)
+    return thread
   } catch {
     return null
   }

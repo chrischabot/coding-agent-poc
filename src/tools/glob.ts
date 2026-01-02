@@ -89,7 +89,7 @@ export const globTool: Tool = {
     name: "Glob",
     description: `Find files by glob pattern.
 
-Use this to find files matching a pattern. Returns file paths sorted by modification time.
+Use this to find files matching a pattern. Order is not guaranteed.
 
 Pattern examples:
 - "**/*.ts" - all TypeScript files
