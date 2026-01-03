@@ -1,12 +1,15 @@
 import { rm, stat } from "node:fs/promises"
-import { isAbsolute, join } from "node:path"
+import { isAbsolute, join, resolve } from "node:path"
 import type { Tool, ToolContext, ToolResult, ExecutionProfile } from "../core/types"
 
 const deleteExecutionProfile: ExecutionProfile = {
-  resourceKeys: (input) => {
-    const path = input.path as string | undefined
-    if (path) {
-      return [{ key: path, mode: "write" }]
+  resourceKeys: (input, workingDirectory) => {
+    const pathInput = input.path as string | undefined
+    if (pathInput) {
+      const resolvedPath = isAbsolute(pathInput)
+        ? pathInput
+        : resolve(workingDirectory ?? process.cwd(), pathInput)
+      return [{ key: resolvedPath, mode: "write" }]
     }
     return []
   },

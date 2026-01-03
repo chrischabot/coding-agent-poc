@@ -1,9 +1,10 @@
-import { AgentLoop } from "../agent/loop"
+import { AgentLoop, CompactionDebugInfo } from "../agent/loop"
 import { registerBuiltinTools } from "../tools"
 import { buildSystemPrompt } from "../prompt/system"
 import { discoverGuidanceFiles, formatGuidanceFiles } from "../prompt/guidance"
 import { createThread, saveThread } from "../session/persistence"
 import { estimateThreadTokens } from "../context/tokens"
+import { loadPermissions, savePermissions } from "../permission"
 import { startTUI, getTUIController } from "../ui"
 import type { PermissionRule } from "../permission"
 
@@ -15,8 +16,8 @@ export interface RunOptions {
   workdir?: string
   debug?: boolean
   tui?: boolean
-  continue?: string
   yolo?: boolean
+  debugCompaction?: boolean
 }
 
 async function promptForPermission(
@@ -38,6 +39,7 @@ export async function runAgent(options: RunOptions): Promise<void> {
   const workingDirectory = options.workdir ?? process.cwd()
   const model = options.model ?? "claude-opus-4-5-20251101"
   const debugMode = options.debug ?? false
+  const debugCompaction = options.debugCompaction ?? false
 
   registerBuiltinTools()
 
@@ -93,6 +95,43 @@ export async function runAgent(options: RunOptions): Promise<void> {
       onTurnComplete: () => {
         log(`\n[DEBUG] Agent completed`)
       },
+      onCompactionDebug: debugCompaction
+        ? (info: CompactionDebugInfo) => {
+            console.log(`\n${"=".repeat(60)}`)
+            console.log(`[COMPACTION DEBUG] Phase: ${info.phase}`)
+            console.log(`${"=".repeat(60)}`)
+
+            if (info.phase === "start") {
+              console.log(`Type: ${info.isIncremental ? "INCREMENTAL" : "FULL"}`)
+              console.log(`Messages to summarize: ${info.messageCount}`)
+              console.log(`Tokens before: ${info.tokensBeforeCompaction}`)
+              if (info.previousSummaryTokens) {
+                console.log(`Previous summary tokens: ${info.previousSummaryTokens}`)
+              }
+              if (info.todoState) {
+                console.log(`\nTODO State:\n${info.todoState}`)
+              }
+            }
+
+            if (info.phase === "summarizing") {
+              console.log(`New summary tokens: ${info.newSummaryTokens}`)
+              console.log(`\n--- SUMMARIZATION PROMPT ---\n${info.summaryPrompt}\n--- END PROMPT ---`)
+              console.log(`\n--- RAW SUMMARY ---\n${info.rawSummary}\n--- END SUMMARY ---`)
+            }
+
+            if (info.phase === "complete") {
+              console.log(`Tokens after: ${info.tokensAfterCompaction}`)
+              console.log(`Incremental: ${info.isIncremental}`)
+              if (info.compactionState) {
+                console.log(`\n--- COMPACTION STATE ---`)
+                console.log(JSON.stringify(info.compactionState, null, 2))
+                console.log(`--- END STATE ---`)
+              }
+            }
+
+            console.log(`${"=".repeat(60)}\n`)
+          }
+        : undefined,
     }
   )
 
@@ -211,6 +250,37 @@ export async function runTUI(options: RunOptions): Promise<void> {
     controller.setTokenUsage(totalInputTokens, totalOutputTokens, contextUsed, DEFAULT_CONTEXT_LIMIT)
   }
 
+  const updateLSPDisplay = (controller: ReturnType<typeof getTUIController>) => {
+    if (!controller || !agent) return
+    const servers = agent.getActiveLSPServers()
+    controller.setLSPServers(servers)
+  }
+
+  const storedPermissions = await loadPermissions(workingDirectory)
+  const grantedPermissions = new Set<string>(storedPermissions)
+
+  const getPermissionKey = (toolName: string, input: Record<string, unknown>): string => {
+    if (toolName === "Bash") {
+      const cmd = String(input.command ?? "").split(" ")[0]
+      return `${toolName}:${cmd}`
+    }
+    return toolName
+  }
+
+  const formatPermissionDetail = (toolName: string, input: Record<string, unknown>): string => {
+    switch (toolName) {
+      case "Bash":
+        const cmd = String(input.command ?? "")
+        return cmd.length > 100 ? cmd.slice(0, 100) + "..." : cmd
+      case "Delete":
+        return `Delete ${input.path}`
+      case "Write":
+        return `Write to ${input.path}`
+      default:
+        return JSON.stringify(input).slice(0, 100)
+    }
+  }
+
   const handleSubmit = async (input: string) => {
     const controller = getTUIController()
     if (!controller) return
@@ -225,19 +295,28 @@ export async function runTUI(options: RunOptions): Promise<void> {
           onText: (text) => {
             controller.addText(text)
           },
-          onToolStart: (_id, name) => {
-            controller.addToolStart(name)
+          onToolStart: (_id, name, input) => {
+            controller.addToolStart(name, input)
           },
           onToolEnd: (_id, result, isError) => {
             controller.addToolEnd(result, isError)
+            updateLSPDisplay(controller)
           },
-          onPermissionRequest: async (toolName, _input, _rule) => {
+          onPermissionRequest: async (toolName, input, _rule) => {
             if (options.yolo) {
-              controller.addText(`\n[PERMISSION] ${toolName} auto-approved (yolo mode)\n`)
               return true
             }
-            controller.addText(`\n[PERMISSION] ${toolName} requires approval - auto-rejecting in TUI mode\n`)
-            return false
+            const permKey = getPermissionKey(toolName, input)
+            if (grantedPermissions.has(permKey)) {
+              return true
+            }
+            const detail = formatPermissionDetail(toolName, input)
+            const approved = await controller.requestPermission(toolName, detail)
+            if (approved) {
+              grantedPermissions.add(permKey)
+              await savePermissions(workingDirectory, grantedPermissions)
+            }
+            return approved
           },
           onPermissionDenied: (toolName, reason) => {
             controller.addText(`\n[PERMISSION] ${toolName} denied: ${reason}\n`)

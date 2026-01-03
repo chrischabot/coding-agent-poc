@@ -16,10 +16,11 @@
     "@anthropic-ai/sdk": "^0.32.0",
     "@opentui/core": "0.1.55",
     "@opentui/react": "0.1.55",
+    "axios": "^1.13.2",
     "react": "^19.0.0",
+    "ulid": "^2.3.0",
     "yargs": "^17.7.2",
-    "zod": "^3.23.8",
-    "ulid": "^2.3.0"
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/bun": "latest",

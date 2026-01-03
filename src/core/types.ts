@@ -7,16 +7,19 @@ export interface Thread {
   messages: Message[]
   workingDirectory: string
   artifacts?: Artifacts
+  compactionStates?: CompactionState[]  // History of compressions
 }
 
 export interface Artifacts {
   plan?: string
   custom?: Record<string, string>
+  scratchpad?: string  // Persistent working memory that survives compression
 }
 
 export type MessageRole = "user" | "assistant" | "system"
 
 export interface Message {
+  id?: string  // Unique message ID for anchor tracking
   role: MessageRole
   content: ContentBlock[]
   state?: MessageState
@@ -56,6 +59,22 @@ export interface SummaryBlock {
   type: "summary"
   summary: string
   originalMessageCount: number
+  // Incremental summarization fields
+  anchorMessageId?: string      // ID of last message that was summarized
+  anchorIndex?: number          // Index fallback for anchor resolution
+  summaryTokens?: number        // Track summary size for soft cap
+  isIncremental?: boolean       // Was this a delta summary?
+}
+
+export interface CompactionState {
+  id: string                    // Unique ID (ULID)
+  timestamp: string             // ISO timestamp
+  summaryText: string           // The actual summary
+  summaryTokens: number         // Token count
+  summaryKind: "llm_summary" | "serialized"
+  anchorMessageId: string       // Last summarized message ID
+  anchorIndex: number           // Index for fallback
+  removedCount: number          // How many messages were removed
 }
 
 export interface ToolSpec {
@@ -68,6 +87,46 @@ export interface ToolSpec {
   }
 }
 
+export interface ToolContextBudget {
+  available(): number
+  canAccommodate(tokens: number): boolean
+  wouldTriggerCompression(tokens: number): boolean
+  estimateFileTokens(filePath: string): Promise<number>
+  estimateContentTokens(content: string): number
+}
+
+export interface ToolContextLSPManager {
+  getClientForFile(filePath: string): Promise<LSPClient | null>
+  getClient(language: string): Promise<LSPClient | null>
+  isAvailable(language: string): Promise<boolean>
+  shutdownAll(): Promise<void>
+  getActiveServers(): string[]
+}
+
+export interface LSPClient {
+  getDocumentSymbols(filePath: string): Promise<SymbolInfo[]>
+  getDefinition(filePath: string, line: number, column: number): Promise<SymbolLocation[]>
+  getReferences(filePath: string, line: number, column: number): Promise<SymbolLocation[]>
+  getHover(filePath: string, line: number, column: number): Promise<string | null>
+  shutdown(): Promise<void>
+}
+
+export interface SymbolInfo {
+  name: string
+  kind: string
+  line: number
+  endLine?: number
+  signature?: string
+}
+
+export interface SymbolLocation {
+  file: string
+  line: number
+  column: number
+  endLine?: number
+  endColumn?: number
+}
+
 export interface ToolContext {
   workingDirectory: string
   threadId: string
@@ -77,6 +136,8 @@ export interface ToolContext {
     toolName: string,
     input: Record<string, unknown>
   ) => Promise<{ permitted: boolean; reason?: string }>
+  budget?: ToolContextBudget
+  lspManager?: ToolContextLSPManager
 }
 
 export interface ToolResult {
@@ -92,7 +153,7 @@ export interface ResourceKey {
 }
 
 export interface ExecutionProfile {
-  resourceKeys: (input: Record<string, unknown>) => ResourceKey[]
+  resourceKeys: (input: Record<string, unknown>, workingDirectory?: string) => ResourceKey[]
 }
 
 export type ToolExecuteFn = (

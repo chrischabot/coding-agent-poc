@@ -11,6 +11,7 @@ import { todoWriteTool, todoReadTool } from "./todo"
 import { webFetchTool } from "./webfetch"
 import { webSearchTool } from "./websearch"
 import { readPlanTool, editPlanTool, readArtifactTool, editArtifactTool } from "./plan"
+import { scratchpadTool, readScratchpadTool } from "./scratchpad"
 import { lookAtTool } from "./look-at"
 import { mermaidTool } from "./mermaid"
 import { readThreadTool } from "./thread"
@@ -21,6 +22,16 @@ import {
   getGitHubDiffTool,
   findGitHubFilesTool,
 } from "./github"
+import { outlineTool } from "./outline"
+import { astGrepTool } from "./astgrep"
+import { readSymbolTool, shutdownAllLSP } from "./read-symbol"
+import {
+  goToDefinitionTool,
+  findReferencesTool,
+  getTypeInfoTool,
+  cleanupSharedLSPManager,
+} from "./lsp-tools"
+import { calculatorTool } from "./calculator"
 
 export function registerBuiltinTools(): void {
   registerTool(readTool)
@@ -43,6 +54,8 @@ export function registerBuiltinTools(): void {
   registerTool(editPlanTool)
   registerTool(readArtifactTool)
   registerTool(editArtifactTool)
+  registerTool(scratchpadTool)
+  registerTool(readScratchpadTool)
   registerTool(lookAtTool)
   registerTool(mermaidTool)
   registerTool(readGitHubFileTool)
@@ -52,6 +65,13 @@ export function registerBuiltinTools(): void {
   registerTool(findGitHubFilesTool)
   registerTool(webSearchTool)
   registerTool(readThreadTool)
+  registerTool(outlineTool)
+  registerTool(astGrepTool)
+  registerTool(readSymbolTool)
+  registerTool(goToDefinitionTool)
+  registerTool(findReferencesTool)
+  registerTool(getTypeInfoTool)
+  registerTool(calculatorTool)
 }
 
 export * from "./registry"
@@ -67,6 +87,7 @@ export { todoWriteTool, todoReadTool, clearTodos, getTodosForThread } from "./to
 export { webFetchTool } from "./webfetch"
 export { webSearchTool } from "./websearch"
 export { readPlanTool, editPlanTool, readArtifactTool, editArtifactTool } from "./plan"
+export { scratchpadTool, readScratchpadTool } from "./scratchpad"
 export { lookAtTool } from "./look-at"
 export { mermaidTool } from "./mermaid"
 export {
@@ -77,3 +98,13 @@ export {
   findGitHubFilesTool,
 } from "./github"
 export { readThreadTool } from "./thread"
+export { outlineTool } from "./outline"
+export { astGrepTool } from "./astgrep"
+export { readSymbolTool, shutdownAllLSP } from "./read-symbol"
+export {
+  goToDefinitionTool,
+  findReferencesTool,
+  getTypeInfoTool,
+  cleanupSharedLSPManager,
+} from "./lsp-tools"
+export { calculatorTool } from "./calculator"

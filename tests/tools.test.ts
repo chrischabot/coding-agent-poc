@@ -7,6 +7,7 @@ import { editTool } from "../src/tools/edit"
 import { bashTool } from "../src/tools/bash"
 import { grepTool } from "../src/tools/grep"
 import { globTool } from "../src/tools/glob"
+import { calculatorTool } from "../src/tools/calculator"
 import type { ToolContext } from "../src/core/types"
 
 describe("Tool Tests", () => {
@@ -453,6 +454,113 @@ describe("Tool Tests", () => {
       expect(result.isError).toBeFalsy()
       expect(result.output).not.toContain("<html")
       expect(result.output).not.toContain("<body")
+    })
+  })
+
+  describe("Calculator Tool", () => {
+    test("evaluates simple expressions", async () => {
+      const result = await calculatorTool.execute({ expression: "2 + 3 * 4" }, context)
+
+      expect(result.isError).toBeFalsy()
+      expect(result.output).toBe("2 + 3 * 4 = 14")
+    })
+
+    test("evaluates complex expressions with parentheses", async () => {
+      const result = await calculatorTool.execute({ expression: "(2 + 3) * (4 - 1) / 2" }, context)
+
+      expect(result.isError).toBeFalsy()
+      expect(result.output).toBe("(2 + 3) * (4 - 1) / 2 = 7.5")
+    })
+
+    test("performs basic operations with operands", async () => {
+      const result = await calculatorTool.execute({ operation: "add", a: 5, b: 3 }, context)
+
+      expect(result.isError).toBeFalsy()
+      expect(result.output).toBe("5 add 3 = 8")
+    })
+
+    test("performs single operand operations", async () => {
+      const result = await calculatorTool.execute({ operation: "sqrt", a: 16 }, context)
+
+      expect(result.isError).toBeFalsy()
+      expect(result.output).toBe("sqrt(16) = 4")
+    })
+
+    test("handles division by zero error", async () => {
+      const result = await calculatorTool.execute({ operation: "divide", a: 10, b: 0 }, context)
+
+      expect(result.isError).toBe(true)
+      expect(result.output).toBe("Error: Division by zero")
+    })
+
+    test("handles modulo by zero error", async () => {
+      const result = await calculatorTool.execute({ operation: "modulo", a: 10, b: 0 }, context)
+
+      expect(result.isError).toBe(true)
+      expect(result.output).toBe("Error: Modulo by zero")
+    })
+
+    test("handles square root of negative number", async () => {
+      const result = await calculatorTool.execute({ operation: "sqrt", a: -4 }, context)
+
+      expect(result.isError).toBe(true)
+      expect(result.output).toBe("Error: Cannot calculate square root of negative number")
+    })
+
+    test("handles natural log of non-positive number", async () => {
+      const result = await calculatorTool.execute({ operation: "log", a: 0 }, context)
+
+      expect(result.isError).toBe(true)
+      expect(result.output).toBe("Error: Cannot calculate natural logarithm of non-positive number")
+    })
+
+    test("sanitizes malicious expressions", async () => {
+      const result = await calculatorTool.execute({ expression: "2 + 3; console.log('hack')" }, context)
+
+      expect(result.isError).toBe(true)
+      expect(result.output).toContain("invalid characters")
+    })
+
+    test("handles unknown operations", async () => {
+      const result = await calculatorTool.execute({ operation: "invalid_op", a: 5, b: 3 }, context)
+
+      expect(result.isError).toBe(true)
+      expect(result.output).toContain("Unknown operation")
+    })
+
+    test("requires parameters", async () => {
+      const result = await calculatorTool.execute({}, context)
+
+      expect(result.isError).toBe(true)
+      expect(result.output).toContain("Please provide either an expression or an operation")
+    })
+
+    test("performs power operations", async () => {
+      const result = await calculatorTool.execute({ operation: "power", a: 2, b: 3 }, context)
+
+      expect(result.isError).toBeFalsy()
+      expect(result.output).toBe("2 power 3 = 8")
+    })
+
+    test("performs trigonometric operations", async () => {
+      const result = await calculatorTool.execute({ operation: "sin", a: 0 }, context)
+
+      expect(result.isError).toBeFalsy()
+      expect(result.output).toBe("sin(0) = 0")
+    })
+
+    test("performs rounding operations", async () => {
+      const result = await calculatorTool.execute({ operation: "round", a: 3.7 }, context)
+
+      expect(result.isError).toBeFalsy()
+      expect(result.output).toBe("round(3.7) = 4")
+    })
+
+    test("handles invalid expressions", async () => {
+      const result = await calculatorTool.execute({ expression: "2 +" }, context)
+
+      expect(result.isError).toBe(true)
+      expect(result.output).toContain("Error evaluating expression")
     })
   })
 })

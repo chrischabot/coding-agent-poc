@@ -1,0 +1,108 @@
+Evaluate these sub-agent tool descriptions for routing clarity.
+
+Rate each 1-5:
+1. **Clarity**: Is the purpose immediately obvious?
+2. **Disambiguation**: Are boundaries with similar agents clear?
+3. **Examples**: Do examples make usage obvious?
+4. **Actionability**: Would Claude select correctly?
+
+Return JSON array with scores and suggestions.
+
+---
+
+## Task
+```
+General-purpose autonomous executor for implementation work.
+
+Use Task for any coding work that touches 1-10 files: new features, bug fixes, refactoring, tests, build scripts, API endpoints, database changes, etc.
+
+Examples:
+- "Add JWT authentication to the login endpoint"
+- "Create unit tests for the UserService class"
+- "Refactor the payment module to use async/await"
+- "Fix the race condition in the cache invalidation"
+
+For frontend/UI work, prefer Painter. For 10+ files, prefer Kraken.
+
+Provide detailed instructions with file paths, acceptance criteria, and context.
+```
+
+## Finder
+```
+Fast code search agent for locating implementations in the local codebase.
+
+Use Finder to answer "where is X?" questions - it runs parallel grep/glob searches and returns file paths with brief context.
+
+Examples:
+- "Find where user authentication is handled"
+- "Locate all API endpoint definitions"
+- "Find usages of the deprecated Logger class"
+- "Where is the database connection configured?"
+
+Returns: File paths and code snippets. Does not modify code or provide analysis.
+```
+
+## Oracle
+```
+Technical advisor for explicit analysis requests and architecture decisions.
+
+Use Oracle ONLY when the user explicitly asks for review, comparison, or trade-off analysis. Oracle reads code and provides recommendations but does NOT write or modify code.
+
+Trigger phrases: "should I use", "review this", "what are the trade-offs", "compare", "analyze", "which approach"
+
+Examples:
+- "Should I use Redis or Memcached for this caching layer?"
+- "Review this auth implementation for security issues"
+- "Compare these two database schemas"
+- "What are the trade-offs of microservices vs monolith here?"
+
+Do NOT use Oracle to validate your own decisions - just implement with Task.
+```
+
+## Painter
+```
+Frontend and design specialist for UI/UX implementation.
+
+Use Painter for any work involving visual interfaces, components, styling, or user experience. Painter understands React, Vue, Svelte, CSS, Tailwind, accessibility, and responsive design.
+
+Examples:
+- "Build a settings page with dark mode toggle"
+- "Add form validation with inline error messages"
+- "Make the dashboard responsive for mobile"
+- "Create a reusable Modal component with animations"
+- "Fix the accessibility issues in the navigation menu"
+
+For backend/API work, use Task instead.
+```
+
+## Librarian
+```
+External repository explorer for GitHub/GitLab URLs.
+
+Use Librarian ONLY when the user provides a GitHub or GitLab URL to explore. Librarian can clone, read, and analyze external repositories.
+
+Examples:
+- "Explore https://github.com/anthropics/anthropic-sdk-python and explain the streaming API"
+- "How does https://github.com/vercel/next.js handle routing?"
+- "Find authentication examples in https://gitlab.com/org/project"
+
+For local codebase work, use Finder (search) or Task (implementation) instead.
+```
+
+## Kraken
+```
+Bulk transformation agent for large-scale changes across 10+ files.
+
+Use Kraken when you need to apply the SAME type of change to many files: renames, API migrations, pattern replacements, or codebase-wide refactors.
+
+Examples:
+- "Rename getUserById to fetchUser across the entire codebase"
+- "Migrate all fetch() calls to use the new HttpClient"
+- "Replace console.log with the Logger utility everywhere"
+- "Update all React class components to functional components"
+
+Kraken works in two phases: first scoping affected files, then applying changes.
+
+For changes to fewer than 10 files, use Task instead.
+```
+

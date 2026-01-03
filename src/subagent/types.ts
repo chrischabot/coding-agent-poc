@@ -27,4 +27,18 @@ export interface SubagentResult {
 
 export interface SubagentContext extends ToolContext {
   parentThreadId: string
+  onDebug?: (info: SubagentDebugInfo) => void
+}
+
+export interface SubagentDebugInfo {
+  phase: "start" | "turn" | "complete"
+  agentType: SubagentType
+  systemPrompt?: string
+  userPrompt?: string
+  turnNumber?: number
+  toolCalls?: { name: string; input: Record<string, unknown> }[]
+  output?: string
+  isError?: boolean
+  totalTurns?: number
+  totalToolCalls?: number
 }

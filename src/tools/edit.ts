@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises"
 import { resolve, isAbsolute, dirname } from "node:path"
 import type { Tool, ToolContext, ExecutionProfile } from "../core/types"
 import { checkFileConflict, recordFileRead } from "../context/file-state"
+import { formatFile } from "../format"
 
 function createUnifiedDiff(
   oldContent: string,
@@ -148,9 +149,11 @@ async function executeEdit(
       }
     }
 
-    const newContent = content.replace(oldStr, newStr)
+    const newContent = content.split(oldStr).join(newStr)
     await writeFile(resolvedPath, newContent, "utf-8")
     await recordFileRead(resolvedPath, context.threadId)
+
+    await formatFile(resolvedPath, context.workingDirectory).catch(() => {})
 
     const diff = createUnifiedDiff(content, newContent, filePath)
     return { output: `File edited successfully.\n\n${diff}` }
@@ -161,10 +164,13 @@ async function executeEdit(
 }
 
 const editExecutionProfile: ExecutionProfile = {
-  resourceKeys: (input) => {
-    const path = input.path as string | undefined
-    if (path) {
-      return [{ key: path, mode: "write" }]
+  resourceKeys: (input, workingDirectory) => {
+    const pathInput = input.path as string | undefined
+    if (pathInput) {
+      const resolvedPath = isAbsolute(pathInput)
+        ? pathInput
+        : resolve(workingDirectory ?? process.cwd(), pathInput)
+      return [{ key: resolvedPath, mode: "write" }]
     }
     return []
   },

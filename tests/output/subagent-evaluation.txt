@@ -1,0 +1,97 @@
+You are evaluating the quality of sub-agent routing and prompt construction in a coding agent system.
+
+## Background
+The coding agent has several specialized sub-agents:
+- **Task**: Fire-and-forget executor for multi-step implementations
+- **Finder**: Fast parallel code search for conceptual queries
+- **Oracle**: Expert technical advisor for architecture and reviews
+- **Painter**: Frontend development specialist
+- **Librarian**: Codebase exploration and understanding
+- **Kraken**: Bulk code transformations
+
+## Evaluation Criteria
+
+For each test case, evaluate:
+
+1. **Routing Correctness (1-5)**: Did the main agent select the right sub-agent for the task?
+   - 5: Perfect match
+   - 4: Good choice, minor alternative could work
+   - 3: Acceptable but not optimal
+   - 2: Wrong sub-agent chosen
+   - 1: Critical mismatch or no sub-agent when needed
+
+2. **System Prompt Quality (1-5)**: Is the sub-agent's system prompt effective?
+   - Clear role definition
+   - Appropriate constraints
+   - Helpful instructions
+
+3. **User Prompt Construction (1-5)**: Was the prompt passed to the sub-agent well-formed?
+   - Contains necessary context
+   - Clear objective
+   - Appropriate level of detail
+
+4. **Tool Access Appropriateness (1-5)**: Does the sub-agent have the right tools?
+   - Read-only agents shouldn't have write tools
+   - Execution agents need appropriate permissions
+
+Provide your evaluation as JSON:
+{
+  "test_name": "...",
+  "routing_correctness": N,
+  "system_prompt_quality": N,
+  "user_prompt_quality": N,
+  "tool_access": N,
+  "overall": N,
+  "issues": ["..."],
+  "suggestions": ["..."]
+}
+
+## Test Results to Evaluate
+
+[
+  {
+    "name": "Code Search - Should use Finder",
+    "prompt": "Find all places in this codebase where authentication tokens are validated",
+    "expected": "finder",
+    "actual": null,
+    "invoked_correctly": false,
+    "system_prompt": "undefined...",
+    "tool_calls": []
+  },
+  {
+    "name": "Architecture Question - Should use Oracle",
+    "prompt": "Analyze the architecture of the permission system in this codebase and recommend improvements for security",
+    "expected": "oracle",
+    "actual": null,
+    "invoked_correctly": false,
+    "system_prompt": "undefined...",
+    "tool_calls": []
+  },
+  {
+    "name": "Multi-file Implementation - Should use Task",
+    "prompt": "Create a new tool called 'calculator' that can perform basic math operations. Add it to the tools directory with proper exports.",
+    "expected": "task",
+    "actual": null,
+    "invoked_correctly": false,
+    "system_prompt": "undefined...",
+    "tool_calls": []
+  },
+  {
+    "name": "Codebase Exploration - Should use Librarian",
+    "prompt": "Explore how the agent loop works end-to-end from receiving a user message to generating a response",
+    "expected": "librarian",
+    "actual": null,
+    "invoked_correctly": false,
+    "system_prompt": "undefined...",
+    "tool_calls": []
+  },
+  {
+    "name": "Simple Direct Task - Should NOT use sub-agent",
+    "prompt": "Read the package.json file and tell me what the project name is",
+    "expected": "none",
+    "actual": null,
+    "invoked_correctly": false,
+    "system_prompt": "undefined...",
+    "tool_calls": []
+  }
+]

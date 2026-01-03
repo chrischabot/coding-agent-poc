@@ -9,31 +9,31 @@ The Coding Agent is a hierarchical AI system designed to handle complex software
 The system relies on a rich registry of tools defined in `src/tools/`. These tools are selectively exposed to different agents based on their capabilities and security profiles.
 
 ### Core File Operations
-- **`read_file`**: Reads content of files.
-- **`edit_file`**: Modifies existing files (often using search/replace blocks).
-- **`write_file`**: Creates new files.
-- **`delete_file`**: Removes files.
-- **`grep`**: Fast regex search within file contents.
-- **`glob`**: File path pattern matching.
+- **`Read`**: Reads content of files with line numbers.
+- **`Edit`**: Modifies existing files using exact string replacement.
+- **`Write`**: Creates new files.
+- **`Delete`**: Removes files.
+- **`Grep`**: Fast regex search within file contents.
+- **`Glob`**: File path pattern matching.
 
 ### Execution & Context
-- **`run_shell_command`** (`bash`): Executes shell commands.
-- **`todo_read` / `todo_write`**: Manages a persistent todo list for long-running tasks.
-- **`read_thread`**: Allows agents to inspect their own conversation history.
+- **`Bash`**: Executes shell commands.
+- **`TodoRead` / `TodoWrite`**: Manages a persistent todo list for long-running tasks.
+- **`ReadThread`**: Allows agents to inspect their own conversation history.
 
 ### Specialized
-- **`web_fetch`**: Retrieves content from URLs.
-- **`web_search`**: Performs Google searches.
-- **`look_at`**: Analyzes images.
-- **`mermaid`**: Generates and renders diagrams.
-- **Plan Tools**: `read_plan`, `edit_plan`, `read_artifact`, `edit_artifact` for high-level planning.
+- **`WebFetch`**: Retrieves content from URLs.
+- **`WebSearch`**: Performs web searches (Tavily/Serper/DuckDuckGo).
+- **`LookAt`**: Analyzes images/PDFs.
+- **`Mermaid`**: Generates and renders diagrams.
+- **Plan Tools**: `ReadPlan`, `EditPlan`, `ReadArtifact`, `EditArtifact` for high-level planning.
 
 ### GitHub Integration
-- `read_github_file`
-- `search_github_code`
-- `search_github_commits`
-- `get_github_diff`
-- `find_github_files`
+- `ReadGitHubFile`
+- `SearchGitHubCode`
+- `SearchGitHubCommits`
+- `GetGitHubDiff`
+- `FindGitHubFiles`
 
 ---
 
@@ -45,7 +45,7 @@ The Main Agent has access to **all** tools (except where permissions restrict th
 **Location:** `src/agent/loop.ts`
 - **Role:** Orchestrator, user interface, decision maker.
 - **Access:** All registered tools.
-- **Key Capability:** Can delegate to any sub-agent via `task`, `finder`, `oracle`, etc., tools.
+- **Key Capability:** Can delegate to any sub-agent via `Task`, `Finder`, `Oracle`, etc., tools.
 
 ### Sub-Agents
 **Location:** `src/subagent/configs.ts`
@@ -53,13 +53,13 @@ Sub-agents are "fire-and-forget" executors. They cannot call other sub-agents.
 
 | Agent Type | Role | Tool Access Permissions | Why? |
 | :--- | :--- | :--- | :--- |
-| **Task** | Implementation | `read`, `edit`, `write`, `bash`, `grep`, `glob`, `todo_*` | Needs full power to implement features and run tests. |
-| **Painter** | Frontend/UI | `read`, `edit`, `write`, `bash`, `grep`, `glob`, `todo_*` | Same as Task, but prompt-tuned for UI work. |
-| **Finder** | Code Search | `read`, `grep`, `glob` | **Read-only**. Safety mechanism to ensure exploration doesn't break code. |
-| **Oracle** | Advisor | `read`, `grep`, `glob` | **Read-only**. Pure reasoning agent; shouldn't touch code. |
-| **Librarian** | Repo Explorer | `read`, `grep`, `glob`, `bash`, **GitHub Tools**, `mermaid` | Specialized for external repo analysis and documentation. |
-| **Kraken Scope** | Bulk Planner | `read`, `grep`, `glob` | **Read-only**. Identifies targets for bulk operations. |
-| **Kraken Executor** | Bulk Applier | `read`, `edit`, `write`, `grep`, `glob` | Focused editing power; no shell access to prevent side effects. |
+| **Task** | Implementation | `Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`, `Todo*` | Needs full power to implement features and run tests. |
+| **Painter** | Frontend/UI | `Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`, `Todo*` | Same as Task, but prompt-tuned for UI work. |
+| **Finder** | Code Search | `Read`, `Grep`, `Glob` | **Read-only**. Safety mechanism to ensure exploration doesn't break code. |
+| **Oracle** | Advisor | `Read`, `Grep`, `Glob` | **Read-only**. Pure reasoning agent; shouldn't touch code. |
+| **Librarian** | Repo Explorer | `Read`, `Grep`, `Glob`, `Bash`, **GitHub Tools**, `Mermaid` | Specialized for external repo analysis and documentation. |
+| **Kraken Scope** | Bulk Planner | `Read`, `Grep`, `Glob` | **Read-only**. Identifies targets for bulk operations. |
+| **Kraken Executor** | Bulk Applier | `Read`, `Edit`, `Write`, `Grep`, `Glob` | Focused editing power; no shell access to prevent side effects. |
 
 ---
 

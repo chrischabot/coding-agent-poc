@@ -1,15 +1,41 @@
 import { AnthropicProvider } from "../provider/anthropic"
 import { getTool, getAllToolSpecs } from "../tools/registry"
 import { PermissionChecker } from "../permission"
-import { estimateThreadTokens } from "../context"
+import { estimateThreadTokens, createContextBudget } from "../context"
+import type { ContextBudget } from "../context"
+import { createLSPManager } from "../lsp"
+import type { LSPManager } from "../lsp"
 import { checkForCorrection, formatCorrectionMessage } from "./correction"
 import type { PermissionPromptFn, PermissionRule } from "../permission"
-import type { Message, ContentBlock, ToolContext, Thread, Usage, StopReason, SummaryBlock, ResourceKey } from "../core/types"
+import type { Message, ContentBlock, ToolContext, Thread, Usage, StopReason, SummaryBlock, ResourceKey, ToolContextBudget, ToolContextLSPManager, CompactionState, TodoItem } from "../core/types"
+import { saveCompactionState, loadLatestCompactionState, loadLatestLlmCompactionState } from "../session/persistence"
+import { estimateTokens, estimateMessageTokens } from "../context/tokens"
+import { ulid } from "ulid"
 
 const DEFAULT_CONTEXT_LIMIT = 150000
 const CONTEXT_COMPRESSION_THRESHOLD = 0.90
-const MESSAGES_TO_KEEP = 10
 const CORRECTION_CHECK_INTERVAL = 3
+
+// Token budget constants for compaction
+const POST_COMPRESSION_TARGET = 30000  // tokens after compression
+const SUMMARY_SOFT_CAP = 8000          // prompt LLM to condense if summary exceeds this
+const SUMMARY_RESERVE = 8000           // reserved for summary itself
+const SYSTEM_PROMPT_ESTIMATE = 4000    // estimate for system prompt
+
+export interface CompactionDebugInfo {
+  phase: "start" | "summarizing" | "complete"
+  reason?: "threshold" | "incremental"
+  isIncremental?: boolean
+  messageCount?: number
+  previousSummaryTokens?: number
+  newSummaryTokens?: number
+  tokensBeforeCompaction?: number
+  tokensAfterCompaction?: number
+  summaryPrompt?: string
+  rawSummary?: string
+  compactionState?: CompactionState
+  todoState?: string
+}
 
 export interface AgentCallbacks {
   onText?: (text: string) => void
@@ -25,6 +51,7 @@ export interface AgentCallbacks {
   onUsage?: (usage: Usage) => void
   onMessageComplete?: (message: Message) => void
   onTurnComplete?: () => void
+  onCompactionDebug?: (info: CompactionDebugInfo) => void
 }
 
 export interface AgentOptions {
@@ -42,6 +69,8 @@ export class AgentLoop {
   private callbacks: AgentCallbacks
   private abortController: AbortController | null = null
   private permissionChecker: PermissionChecker
+  private budget: ContextBudget
+  private lspManager: LSPManager
 
   constructor(
     thread: Thread,
@@ -57,6 +86,14 @@ export class AgentLoop {
       ? (toolName, input, rule) => callbacks.onPermissionRequest!(toolName, input, rule)
       : null
     this.permissionChecker = new PermissionChecker([], promptFn)
+
+    this.budget = createContextBudget({
+      contextLimit: options.contextLimit ?? DEFAULT_CONTEXT_LIMIT,
+      compressionThreshold: CONTEXT_COMPRESSION_THRESHOLD,
+    })
+
+    // Initialize shared LSP manager for code intelligence
+    this.lspManager = createLSPManager(thread.workingDirectory)
   }
 
   async run(userMessage: string): Promise<void> {
@@ -88,6 +125,11 @@ export class AgentLoop {
     this.abortController?.abort()
   }
 
+  async shutdown(): Promise<void> {
+    this.abort()
+    await this.lspManager.shutdownAll()
+  }
+
   private addUserMessage(text: string): void {
     const message: Message = {
       role: "user",
@@ -97,6 +139,10 @@ export class AgentLoop {
   }
 
   private async runTurn(): Promise<boolean> {
+    // Update budget with current thread token usage
+    const currentTokens = estimateThreadTokens(this.thread.messages)
+    this.budget.setCurrentThreadTokens(currentTokens)
+
     await this.compressContextIfNeeded()
 
     const content: ContentBlock[] = []
@@ -161,6 +207,24 @@ export class AgentLoop {
   private async executeToolsParallel(
     toolCalls: { id: string; name: string; input: Record<string, unknown> }[]
   ): Promise<ContentBlock[]> {
+    // Create budget interface for tools
+    const budgetForTools: ToolContextBudget = {
+      available: () => this.budget.available(),
+      canAccommodate: (tokens: number) => this.budget.canAccommodate(tokens),
+      wouldTriggerCompression: (tokens: number) => this.budget.wouldTriggerCompression(tokens),
+      estimateFileTokens: (filePath: string) => this.budget.estimateFileTokens(filePath),
+      estimateContentTokens: (content: string) => this.budget.estimateContentTokens(content),
+    }
+
+    // Create LSP manager interface for tools
+    const lspManagerForTools: ToolContextLSPManager = {
+      getClientForFile: (filePath: string) => this.lspManager.getClientForFile(filePath),
+      getClient: (language: string) => this.lspManager.getClient(language as any),
+      isAvailable: (language: string) => this.lspManager.isAvailable(language as any),
+      shutdownAll: () => this.lspManager.shutdownAll(),
+      getActiveServers: () => this.lspManager.getActiveServers(),
+    }
+
     const context: ToolContext = {
       workingDirectory: this.thread.workingDirectory,
       threadId: this.thread.id,
@@ -170,6 +234,8 @@ export class AgentLoop {
         const permission = await this.permissionChecker.check(toolName, input)
         return { permitted: permission.permitted, reason: permission.reason }
       },
+      budget: budgetForTools,
+      lspManager: lspManagerForTools,
     }
 
     // Group tools into batches based on resource conflicts
@@ -230,7 +296,7 @@ export class AgentLoop {
 
     const toolsWithResources = toolCalls.map((tc) => {
       const tool = getTool(tc.name)
-      const resourceKeys = tool?.executionProfile?.resourceKeys(tc.input) ?? []
+      const resourceKeys = tool?.executionProfile?.resourceKeys(tc.input, this.thread.workingDirectory) ?? []
       return { ...tc, resourceKeys }
     })
 
@@ -278,6 +344,10 @@ export class AgentLoop {
     return this.thread
   }
 
+  getActiveLSPServers(): string[] {
+    return this.lspManager.getActiveServers()
+  }
+
   private checkAndApplyCorrection(): void {
     const result = checkForCorrection(this.thread.messages)
 
@@ -302,33 +372,261 @@ export class AgentLoop {
     }
 
     const messageCount = this.thread.messages.length
-    if (messageCount <= MESSAGES_TO_KEEP) {
+    if (messageCount <= 2) {
+      return // Need at least a few messages to compress
+    }
+
+    const percentUsed = Math.round((estimatedTokens / contextLimit) * 100)
+
+    // Find existing summary and its anchor (for incremental summarization)
+    const existingSummary = this.findExistingSummary()
+    const lastCompactionState = loadLatestLlmCompactionState(this.thread)
+
+    // Calculate token budget for suffix (messages to keep)
+    const availableBudget = POST_COMPRESSION_TARGET - SUMMARY_RESERVE - SYSTEM_PROMPT_ESTIMATE
+
+    // Select suffix using token-based approach
+    const { suffixStart, suffixTokens } = this.selectSuffix(availableBudget)
+
+    if (suffixStart === 0) {
+      // Nothing to summarize
       return
     }
 
-    const messagesToSummarize = this.thread.messages.slice(0, messageCount - MESSAGES_TO_KEEP)
-    const messagesToKeep = this.thread.messages.slice(messageCount - MESSAGES_TO_KEEP)
+    // Determine what messages to summarize
+    let messagesToSummarize: Message[]
+    let previousSummary: string | undefined
+    let previousSummaryTokens: number | undefined
 
-    const percentUsed = Math.round((estimatedTokens / contextLimit) * 100)
-    this.callbacks.onText?.(`\n[Context at ${percentUsed}% - compressing ${messagesToSummarize.length} messages...]\n`)
+    if (existingSummary && lastCompactionState) {
+      // Incremental summarization: only summarize messages since last anchor
+      const anchorIndex = this.resolveAnchorIndex(lastCompactionState)
+      const deltaStart = Math.max(0, anchorIndex + 1)
 
-    const summary = await this.provider.summarize(messagesToSummarize, this.options.model)
+      // Skip the summary message itself if it's at the start
+      const effectiveStart = this.thread.messages[0]?.content[0]?.type === "summary" ? 1 : deltaStart
 
+      messagesToSummarize = this.thread.messages.slice(effectiveStart, suffixStart)
+      previousSummary = lastCompactionState.summaryText
+      previousSummaryTokens = lastCompactionState.summaryTokens
+
+      this.callbacks.onText?.(`\n[Context at ${percentUsed}% - incrementally compressing ${messagesToSummarize.length} new messages...]\n`)
+    } else {
+      // Full summarization
+      messagesToSummarize = this.thread.messages.slice(0, suffixStart)
+      this.callbacks.onText?.(`\n[Context at ${percentUsed}% - compressing ${messagesToSummarize.length} messages...]\n`)
+    }
+
+    if (messagesToSummarize.length === 0) {
+      return
+    }
+
+    // Extract TODO state to preserve
+    const todoState = this.extractTodoState(messagesToSummarize)
+
+    // Emit debug info before summarization
+    this.callbacks.onCompactionDebug?.({
+      phase: "start",
+      reason: previousSummary ? "incremental" : "threshold",
+      isIncremental: !!previousSummary,
+      messageCount: messagesToSummarize.length,
+      previousSummaryTokens,
+      tokensBeforeCompaction: estimatedTokens,
+      todoState,
+    })
+
+    // Generate summary
+    const summarizeResult = await this.provider.summarize(
+      messagesToSummarize,
+      this.options.model,
+      {
+        previousSummary,
+        previousSummaryTokens,
+        todoState,
+      }
+    )
+
+    const summary = summarizeResult.summary
+    const summaryTokens = estimateTokens(summary)
+
+    // Emit debug info after summarization
+    this.callbacks.onCompactionDebug?.({
+      phase: "summarizing",
+      summaryPrompt: summarizeResult.prompt,
+      rawSummary: summarizeResult.rawResponse,
+      newSummaryTokens: summaryTokens,
+    })
+
+    // Get anchor info from last summarized message
+    const anchorIndex = suffixStart - 1
+    const anchorMessage = this.thread.messages[anchorIndex]
+    const anchorMessageId = anchorMessage?.id ?? `msg-${ulid()}`
+
+    // Ensure anchor message has an ID
+    if (!anchorMessage.id) {
+      anchorMessage.id = anchorMessageId
+    }
+
+    // Create summary block with anchor info
     const summaryBlock: SummaryBlock = {
       type: "summary",
       summary,
-      originalMessageCount: messagesToSummarize.length,
+      originalMessageCount: messagesToSummarize.length + (previousSummary ? lastCompactionState?.removedCount ?? 0 : 0),
+      anchorMessageId,
+      anchorIndex,
+      summaryTokens,
+      isIncremental: !!previousSummary,
     }
 
     const summaryMessage: Message = {
+      id: `summary-${ulid()}`,
       role: "user",
       content: [summaryBlock],
     }
 
+    // Keep suffix messages
+    const messagesToKeep = this.thread.messages.slice(suffixStart)
     this.thread.messages = [summaryMessage, ...messagesToKeep]
-    
+
+    // Save compaction state for future incremental summarization
+    const compactionStateId = await saveCompactionState(this.thread, {
+      summaryText: summary,
+      summaryTokens,
+      summaryKind: "llm_summary",
+      anchorMessageId,
+      anchorIndex,
+      removedCount: suffixStart,
+    })
+
     const newTokens = estimateThreadTokens(this.thread.messages)
     const newPercent = Math.round((newTokens / contextLimit) * 100)
-    this.callbacks.onText?.(`[Context compressed to ${newPercent}%]\n`)
+
+    // Emit debug info after compaction complete
+    const latestState = loadLatestCompactionState(this.thread)
+    this.callbacks.onCompactionDebug?.({
+      phase: "complete",
+      isIncremental: !!previousSummary,
+      tokensAfterCompaction: newTokens,
+      compactionState: latestState ?? undefined,
+    })
+
+    this.callbacks.onText?.(`[Context compressed to ${newPercent}% (${previousSummary ? "incremental" : "full"})]\n`)
+  }
+
+  /**
+   * Find existing summary block in messages
+   */
+  private findExistingSummary(): SummaryBlock | null {
+    for (const msg of this.thread.messages) {
+      for (const block of msg.content) {
+        if (block.type === "summary") {
+          return block
+        }
+      }
+    }
+    return null
+  }
+
+  /**
+   * Resolve anchor index from compaction state
+   */
+  private resolveAnchorIndex(state: CompactionState): number {
+    // Try to find by message ID first
+    if (state.anchorMessageId) {
+      const idx = this.thread.messages.findIndex(m => m.id === state.anchorMessageId)
+      if (idx >= 0) return idx
+    }
+    // Fall back to stored index
+    return state.anchorIndex
+  }
+
+  /**
+   * Select suffix (messages to keep) based on token budget
+   */
+  private selectSuffix(availableBudget: number): { suffixStart: number; suffixTokens: number } {
+    let keptTokens = 0
+    let suffixStart = this.thread.messages.length
+    const messages = this.thread.messages
+
+    // Work backwards, keeping messages until budget exhausted
+    let i = messages.length - 1
+    while (i >= 0) {
+      const msg = messages[i]
+      const msgTokens = estimateMessageTokens(msg)
+
+      // Check if this is a tool_result that should be paired with preceding tool_use
+      if (this.isToolResultMessage(msg) && i > 0) {
+        const prevMsg = messages[i - 1]
+        if (this.hasToolUseForResult(prevMsg, msg)) {
+          // Include both tool_use and tool_result together
+          const prevTokens = estimateMessageTokens(prevMsg)
+          const pairTokens = msgTokens + prevTokens
+
+          if (keptTokens + pairTokens > availableBudget) {
+            break
+          }
+
+          keptTokens += pairTokens
+          suffixStart = i - 1 // Include both messages
+          i -= 2 // Skip both
+          continue
+        }
+      }
+
+      if (keptTokens + msgTokens > availableBudget) {
+        break
+      }
+
+      keptTokens += msgTokens
+      suffixStart = i
+      i--
+    }
+
+    return { suffixStart, suffixTokens: keptTokens }
+  }
+
+  /**
+   * Check if message is a tool result message
+   */
+  private isToolResultMessage(msg: Message): boolean {
+    return msg.content.some(b => b.type === "tool_result")
+  }
+
+  /**
+   * Check if message has tool_use that matches the tool_result
+   */
+  private hasToolUseForResult(prevMsg: Message, resultMsg: Message): boolean {
+    const resultIds = new Set(
+      resultMsg.content
+        .filter((b): b is { type: "tool_result"; toolUseId: string; content: string } => b.type === "tool_result")
+        .map(b => b.toolUseId)
+    )
+
+    return prevMsg.content.some(
+      b => b.type === "tool_use" && resultIds.has(b.id)
+    )
+  }
+
+  /**
+   * Extract TODO state from messages to preserve in summary
+   */
+  private extractTodoState(messages: Message[]): string | undefined {
+    // Search backwards for the last TodoWrite tool call
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i]
+      if (msg.role !== "assistant") continue
+
+      for (const block of msg.content) {
+        if (block.type === "tool_use" && block.name === "TodoWrite") {
+          const input = block.input as { todos?: TodoItem[] }
+          if (input.todos && Array.isArray(input.todos)) {
+            return input.todos
+              .map(t => `[${t.status}] ${t.content}`)
+              .join("\n")
+          }
+        }
+      }
+    }
+    return undefined
   }
 }

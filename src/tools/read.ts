@@ -2,9 +2,17 @@ import { readFile, stat } from "node:fs/promises"
 import { resolve, isAbsolute } from "node:path"
 import type { Tool, ToolContext, ExecutionProfile } from "../core/types"
 import { recordFileRead } from "../context/file-state"
+import { smartTruncate, formatTruncatedOutput } from "../context/truncation"
 
 const MAX_LINES = 2000
 const MAX_LINE_LENGTH = 2000
+const LARGE_FILE_THRESHOLD = 500 // Lines
+const MAX_TOKENS_PER_READ = 20000 // ~80KB
+const CHARS_PER_TOKEN = 4
+
+function estimateContentTokens(content: string): number {
+  return Math.ceil(content.length / CHARS_PER_TOKEN)
+}
 
 async function executeRead(
   input: Record<string, unknown>,
@@ -30,7 +38,25 @@ async function executeRead(
 
     const content = await readFile(resolvedPath, "utf-8")
     const lines = content.split("\n")
+    const estimatedTokens = estimateContentTokens(content)
 
+    // Apply smart truncation for large files (always, not just when budget is tight)
+    if (lines.length > LARGE_FILE_THRESHOLD || estimatedTokens > MAX_TOKENS_PER_READ) {
+      const truncated = smartTruncate(content, resolvedPath, {
+        maxTokens: MAX_TOKENS_PER_READ,
+        targetRange: offset > 0 ? {
+          startLine: offset,
+          endLine: offset + limit
+        } : undefined
+      })
+
+      if (truncated.wasTruncated) {
+        await recordFileRead(resolvedPath, context.threadId)
+        return { output: formatTruncatedOutput(truncated, filePath) }
+      }
+    }
+
+    // Standard processing for smaller files or when truncation didn't apply
     const startLine = Math.max(0, offset)
     const endLine = Math.min(lines.length, startLine + limit)
     const selectedLines = lines.slice(startLine, endLine)
@@ -50,7 +76,7 @@ async function executeRead(
     let output = numberedLines.join("\n")
 
     if (endLine < lines.length) {
-      output += `\n\n(File has more lines. Use 'offset' parameter to read beyond line ${endLine})`
+      output += `\n\n(File has ${lines.length} lines total. Use 'offset' parameter to read beyond line ${endLine})`
     }
 
     await recordFileRead(resolvedPath, context.threadId)
@@ -63,10 +89,13 @@ async function executeRead(
 }
 
 const readExecutionProfile: ExecutionProfile = {
-  resourceKeys: (input) => {
-    const path = input.path as string | undefined
-    if (path) {
-      return [{ key: path, mode: "read" }]
+  resourceKeys: (input, workingDirectory) => {
+    const pathInput = input.path as string | undefined
+    if (pathInput) {
+      const resolvedPath = isAbsolute(pathInput)
+        ? pathInput
+        : resolve(workingDirectory ?? process.cwd(), pathInput)
+      return [{ key: resolvedPath, mode: "read" }]
     }
     return []
   },

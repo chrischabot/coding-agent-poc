@@ -1,12 +1,16 @@
 import { writeFile, mkdir } from "node:fs/promises"
-import { dirname, isAbsolute, join } from "node:path"
+import { dirname, isAbsolute, join, resolve } from "node:path"
 import type { Tool, ToolContext, ToolResult, ExecutionProfile } from "../core/types"
+import { formatFile } from "../format"
 
 const writeExecutionProfile: ExecutionProfile = {
-  resourceKeys: (input) => {
-    const path = input.path as string | undefined
-    if (path) {
-      return [{ key: path, mode: "write" }]
+  resourceKeys: (input, workingDirectory) => {
+    const pathInput = input.path as string | undefined
+    if (pathInput) {
+      const resolvedPath = isAbsolute(pathInput)
+        ? pathInput
+        : resolve(workingDirectory ?? process.cwd(), pathInput)
+      return [{ key: resolvedPath, mode: "write" }]
     }
     return []
   },
@@ -53,6 +57,7 @@ Parent directories will be created automatically if they don't exist.`,
       const dir = dirname(filePath)
       await mkdir(dir, { recursive: true })
       await writeFile(filePath, content, "utf-8")
+      await formatFile(filePath, context.workingDirectory).catch(() => {})
       return { output: `Created file: ${filePath} (${content.length} bytes)` }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

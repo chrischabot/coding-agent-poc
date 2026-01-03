@@ -1,4 +1,4 @@
-export { SubagentRunner } from "./runner"
+export { SubagentRunner, setGlobalSubagentDebug, getGlobalSubagentDebug } from "./runner"
 export {
   createTaskConfig,
   createFinderConfig,
@@ -8,4 +8,4 @@ export {
   createKrakenScopeConfig,
   createKrakenExecutorConfig,
 } from "./configs"
-export type { SubagentConfig, SubagentInput, SubagentResult, SubagentContext, SubagentType } from "./types"
+export type { SubagentConfig, SubagentInput, SubagentResult, SubagentContext, SubagentType, SubagentDebugInfo } from "./types"

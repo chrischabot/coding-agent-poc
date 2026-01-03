@@ -1,12 +1,12 @@
 import { stat } from "node:fs/promises"
 
 interface FileReadRecord {
-  threadId: string
   timestamp: number
   mtime: number
 }
 
-const fileReadTimestamps = new Map<string, FileReadRecord>()
+type ThreadFileRecords = Map<string, FileReadRecord>
+const fileReadsByThread = new Map<string, ThreadFileRecords>()
 
 export async function recordFileRead(
   filePath: string,
@@ -14,13 +14,22 @@ export async function recordFileRead(
 ): Promise<void> {
   try {
     const stats = await stat(filePath)
-    fileReadTimestamps.set(filePath, {
-      threadId,
+    
+    let threadRecords = fileReadsByThread.get(threadId)
+    if (!threadRecords) {
+      threadRecords = new Map()
+      fileReadsByThread.set(threadId, threadRecords)
+    }
+    
+    threadRecords.set(filePath, {
       timestamp: Date.now(),
       mtime: stats.mtimeMs,
     })
   } catch {
-    fileReadTimestamps.delete(filePath)
+    const threadRecords = fileReadsByThread.get(threadId)
+    if (threadRecords) {
+      threadRecords.delete(filePath)
+    }
   }
 }
 
@@ -28,13 +37,13 @@ export async function checkFileConflict(
   filePath: string,
   threadId: string
 ): Promise<{ hasConflict: boolean; message?: string }> {
-  const lastRead = fileReadTimestamps.get(filePath)
-
-  if (!lastRead) {
+  const threadRecords = fileReadsByThread.get(threadId)
+  if (!threadRecords) {
     return { hasConflict: false }
   }
 
-  if (lastRead.threadId !== threadId) {
+  const lastRead = threadRecords.get(filePath)
+  if (!lastRead) {
     return { hasConflict: false }
   }
 
@@ -57,16 +66,14 @@ export async function checkFileConflict(
 
 export function clearFileState(filePath?: string): void {
   if (filePath) {
-    fileReadTimestamps.delete(filePath)
+    for (const threadRecords of fileReadsByThread.values()) {
+      threadRecords.delete(filePath)
+    }
   } else {
-    fileReadTimestamps.clear()
+    fileReadsByThread.clear()
   }
 }
 
 export function clearThreadFileState(threadId: string): void {
-  for (const [path, record] of fileReadTimestamps) {
-    if (record.threadId === threadId) {
-      fileReadTimestamps.delete(path)
-    }
-  }
+  fileReadsByThread.delete(threadId)
 }

@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test"
 import { mkdir, rm, writeFile } from "node:fs/promises"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { tmpdir } from "node:os"
 import { registerBuiltinTools, getTool } from "../src/tools"
 import type { ResourceKey } from "../src/core/types"
@@ -23,43 +23,50 @@ describe("Execution Profiles", () => {
       const tool = getTool("Read")
       expect(tool?.executionProfile).toBeDefined()
 
-      const keys = tool?.executionProfile?.resourceKeys({ path: "test.txt" })
-      expect(keys).toEqual([{ key: "test.txt", mode: "read" }])
+      const keys = tool?.executionProfile?.resourceKeys({ path: "test.txt" }, testDir)
+      expect(keys).toEqual([{ key: join(testDir, "test.txt"), mode: "read" }])
     })
 
     test("Edit tool declares write lock on path", () => {
       const tool = getTool("Edit")
       expect(tool?.executionProfile).toBeDefined()
 
-      const keys = tool?.executionProfile?.resourceKeys({ path: "test.txt" })
-      expect(keys).toEqual([{ key: "test.txt", mode: "write" }])
+      const keys = tool?.executionProfile?.resourceKeys({ path: "test.txt" }, testDir)
+      expect(keys).toEqual([{ key: join(testDir, "test.txt"), mode: "write" }])
     })
 
     test("Write tool declares write lock on path", () => {
       const tool = getTool("Write")
       expect(tool?.executionProfile).toBeDefined()
 
-      const keys = tool?.executionProfile?.resourceKeys({ path: "test.txt" })
-      expect(keys).toEqual([{ key: "test.txt", mode: "write" }])
+      const keys = tool?.executionProfile?.resourceKeys({ path: "test.txt" }, testDir)
+      expect(keys).toEqual([{ key: join(testDir, "test.txt"), mode: "write" }])
     })
 
     test("Delete tool declares write lock on path", () => {
       const tool = getTool("Delete")
       expect(tool?.executionProfile).toBeDefined()
 
-      const keys = tool?.executionProfile?.resourceKeys({ path: "test.txt" })
-      expect(keys).toEqual([{ key: "test.txt", mode: "write" }])
+      const keys = tool?.executionProfile?.resourceKeys({ path: "test.txt" }, testDir)
+      expect(keys).toEqual([{ key: join(testDir, "test.txt"), mode: "write" }])
+    })
+
+    test("absolute paths are preserved", () => {
+      const tool = getTool("Read")
+      const absPath = "/absolute/path/file.txt"
+      const keys = tool?.executionProfile?.resourceKeys({ path: absPath }, testDir)
+      expect(keys).toEqual([{ key: absPath, mode: "read" }])
     })
 
     test("tools without executionProfile return empty keys", () => {
       const tool = getTool("Grep")
-      const keys = tool?.executionProfile?.resourceKeys({ pattern: "test" }) ?? []
+      const keys = tool?.executionProfile?.resourceKeys({ pattern: "test" }, testDir) ?? []
       expect(keys).toEqual([])
     })
 
     test("tools return empty keys when path is missing", () => {
       const tool = getTool("Read")
-      const keys = tool?.executionProfile?.resourceKeys({})
+      const keys = tool?.executionProfile?.resourceKeys({}, testDir)
       expect(keys).toEqual([])
     })
   })
@@ -109,7 +116,8 @@ describe("Execution Profiles", () => {
 
   describe("Batching Logic", () => {
     function batchByResources(
-      toolCalls: { name: string; input: Record<string, unknown> }[]
+      toolCalls: { name: string; input: Record<string, unknown> }[],
+      workingDirectory: string
     ): { name: string; input: Record<string, unknown> }[][] {
       if (toolCalls.length <= 1) {
         return [toolCalls]
@@ -117,7 +125,7 @@ describe("Execution Profiles", () => {
 
       const toolsWithResources = toolCalls.map((tc) => {
         const tool = getTool(tc.name)
-        const resourceKeys = tool?.executionProfile?.resourceKeys(tc.input) ?? []
+        const resourceKeys = tool?.executionProfile?.resourceKeys(tc.input, workingDirectory) ?? []
         return { ...tc, resourceKeys }
       })
 
@@ -164,7 +172,7 @@ describe("Execution Profiles", () => {
         { name: "Read", input: { path: "file.txt" } },
         { name: "Read", input: { path: "file.txt" } },
       ]
-      const batches = batchByResources(calls)
+      const batches = batchByResources(calls, testDir)
       expect(batches.length).toBe(1)
       expect(batches[0].length).toBe(2)
     })
@@ -174,7 +182,7 @@ describe("Execution Profiles", () => {
         { name: "Read", input: { path: "file.txt" } },
         { name: "Edit", input: { path: "file.txt", old_str: "", new_str: "" } },
       ]
-      const batches = batchByResources(calls)
+      const batches = batchByResources(calls, testDir)
       expect(batches.length).toBe(2)
     })
 
@@ -184,7 +192,7 @@ describe("Execution Profiles", () => {
         { name: "Edit", input: { path: "file2.txt", old_str: "", new_str: "" } },
         { name: "Write", input: { path: "file3.txt", content: "" } },
       ]
-      const batches = batchByResources(calls)
+      const batches = batchByResources(calls, testDir)
       expect(batches.length).toBe(1)
       expect(batches[0].length).toBe(3)
     })
@@ -196,7 +204,7 @@ describe("Execution Profiles", () => {
         { name: "Edit", input: { path: "A.txt", old_str: "", new_str: "" } },
         { name: "Write", input: { path: "B.txt", content: "" } },
       ]
-      const batches = batchByResources(calls)
+      const batches = batchByResources(calls, testDir)
 
       expect(batches.length).toBe(2)
 
@@ -214,7 +222,7 @@ describe("Execution Profiles", () => {
         { name: "Glob", input: { pattern: "*.ts" } },
         { name: "Read", input: { path: "file.txt" } },
       ]
-      const batches = batchByResources(calls)
+      const batches = batchByResources(calls, testDir)
       expect(batches.length).toBe(1)
       expect(batches[0].length).toBe(3)
     })
@@ -228,7 +236,7 @@ describe("Execution Profiles", () => {
       expect(tool).toBeDefined()
       expect(tool?.executionProfile).toBeDefined()
 
-      const keys = tool?.executionProfile?.resourceKeys({ path: "test.txt" })
+      const keys = tool?.executionProfile?.resourceKeys({ path: "test.txt" }, testDir)
       expect(keys?.length).toBeGreaterThan(0)
       expect(keys?.[0].mode).toBe("write")
     })
@@ -238,7 +246,7 @@ describe("Execution Profiles", () => {
       expect(tool).toBeDefined()
       expect(tool?.executionProfile).toBeDefined()
 
-      const keys = tool?.executionProfile?.resourceKeys({ path: "test.txt" })
+      const keys = tool?.executionProfile?.resourceKeys({ path: "test.txt" }, testDir)
       expect(keys?.length).toBeGreaterThan(0)
       expect(keys?.[0].mode).toBe("read")
     })

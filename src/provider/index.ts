@@ -1,1 +1,1 @@
-export { AnthropicProvider } from "./anthropic"
+export { AnthropicProvider, setUseApiKeyMode, isUsingApiKey } from "./anthropic"

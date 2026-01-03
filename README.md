@@ -180,7 +180,7 @@ src/
 
 - **Runtime**: Bun
 - **Language**: TypeScript (strict mode)
-- **Model**: Claude Sonnet 4 (`claude-sonnet-4-20250514`)
+- **Model**: Claude Opus 4.5 (`claude-opus-4-5-20251101`)
 - **API**: Anthropic SDK with streaming
 
 ## License

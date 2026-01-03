@@ -455,7 +455,7 @@ bun run src/index.ts --interactive
 bun run src/index.ts --tui
 
 # With custom model
-bun run src/index.ts --prompt "task" --model claude-sonnet-4-20250514
+bun run src/index.ts --prompt "task" --model claude-opus-4-5-20251101
 
 # YOLO mode (auto-approve all permissions)
 bun run src/index.ts --prompt "task" --yolo
@@ -469,7 +469,7 @@ Notes:
 
 - **Runtime**: Bun
 - **Language**: TypeScript (strict)
-- **Model**: Claude Sonnet 4 (claude-sonnet-4-20250514)
+- **Model**: Claude Opus 4.5 (claude-opus-4-5-20251101)
 - **API**: Anthropic SDK with streaming
 - **Testing**: bun:test
 

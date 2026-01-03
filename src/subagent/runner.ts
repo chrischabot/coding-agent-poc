@@ -1,6 +1,17 @@
 import { AnthropicProvider } from "../provider/anthropic"
 import type { Message, ContentBlock, ToolContext, Tool, StopReason, ResourceKey } from "../core/types"
-import type { SubagentConfig, SubagentResult, SubagentContext } from "./types"
+import type { SubagentConfig, SubagentResult, SubagentContext, SubagentDebugInfo } from "./types"
+
+// Global debug callback for testing
+let globalDebugCallback: ((info: SubagentDebugInfo) => void) | null = null
+
+export function setGlobalSubagentDebug(callback: ((info: SubagentDebugInfo) => void) | null): void {
+  globalDebugCallback = callback
+}
+
+export function getGlobalSubagentDebug(): ((info: SubagentDebugInfo) => void) | null {
+  return globalDebugCallback
+}
 
 /**
  * SubagentRunner executes a nested agent loop with limited tool access.
@@ -30,6 +41,15 @@ export class SubagentRunner {
       { role: "user", content: [{ type: "text", text: prompt }] }
     ]
 
+    // Emit start debug info (to context callback or global)
+    const debugCallback = this.context.onDebug ?? globalDebugCallback
+    debugCallback?.({
+      phase: "start",
+      agentType: this.config.type,
+      systemPrompt: this.config.systemPrompt,
+      userPrompt: prompt,
+    })
+
     let turns = 0
     let totalToolCalls = 0
     let finalOutput = ""
@@ -40,6 +60,14 @@ export class SubagentRunner {
 
       const { content, stopReason, toolCalls } = await this.runTurn(messages)
       totalToolCalls += toolCalls.length
+
+      // Emit turn debug info
+      debugCallback?.({
+        phase: "turn",
+        agentType: this.config.type,
+        turnNumber: turns,
+        toolCalls: toolCalls.map(tc => ({ name: tc.name, input: tc.input })),
+      })
 
       const assistantMessage: Message = {
         role: "assistant",
@@ -67,6 +95,16 @@ export class SubagentRunner {
       }
       messages.push(userMessage)
     }
+
+    // Emit complete debug info
+    debugCallback?.({
+      phase: "complete",
+      agentType: this.config.type,
+      output: finalOutput,
+      isError: hadError,
+      totalTurns: turns,
+      totalToolCalls: totalToolCalls,
+    })
 
     return {
       output: finalOutput,

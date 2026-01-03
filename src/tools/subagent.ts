@@ -16,22 +16,19 @@ const DEFAULT_MODEL = "claude-opus-4-5-20251101"
 export const taskTool: Tool = {
   spec: {
     name: "Task",
-    description: `Fire-and-forget executor for multi-step implementations.
+    description: `General-purpose autonomous executor for implementation work.
 
-WHEN TO USE:
-- Multi-step feature implementations
-- Creating new files or components
-- Running tests or builds
-- Code refactoring across files
-- When you know EXACTLY what needs to be done
+Use Task for any coding work that touches 1-10 files: new features, bug fixes, refactoring, tests, build scripts, API endpoints, database changes, etc.
 
-WHEN NOT TO USE:
-- Exploring or researching code
-- Making architectural decisions
-- Tasks requiring back-and-forth with user
-- Simple single-file edits
+Examples:
+- "Add JWT authentication to the login endpoint"
+- "Create unit tests for the UserService class"
+- "Refactor the payment module to use async/await"
+- "Fix the race condition in the cache invalidation"
 
-Write detailed, specific prompts with context and acceptance criteria.`,
+For frontend/UI work, prefer Painter. For 10+ files, prefer Kraken.
+
+Provide detailed instructions with file paths, acceptance criteria, and context.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -80,20 +77,17 @@ Write detailed, specific prompts with context and acceptance criteria.`,
 export const finderTool: Tool = {
   spec: {
     name: "Finder",
-    description: `Fast, parallel code search agent for conceptual queries.
+    description: `Fast code search agent for locating implementations in the local codebase.
 
-Use this to find code that matches conceptual descriptions - it searches across languages and layers using grep and glob in parallel.
+Use Finder to answer "where is X?" questions - it runs parallel grep/glob searches and returns file paths with brief context.
 
-WHEN TO USE:
-- Mapping features across the codebase
-- Finding implementations of specific functionality
-- Tracking capabilities and side-effects
-- Understanding where something is used
+Examples:
+- "Find where user authentication is handled"
+- "Locate all API endpoint definitions"
+- "Find usages of the deprecated Logger class"
+- "Where is the database connection configured?"
 
-WHEN NOT TO USE:
-- Making code changes (use Task instead)
-- Design advice (use Oracle instead)
-- Simple text searches (use Grep directly)`,
+Returns: File paths and code snippets. Does not modify code or provide analysis.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -137,21 +131,19 @@ WHEN NOT TO USE:
 export const oracleTool: Tool = {
   spec: {
     name: "Oracle",
-    description: `Expert technical advisor for architecture, reviews, and complex debugging.
+    description: `Technical advisor for explicit analysis requests and architecture decisions.
 
-Use this for high-quality technical guidance when you need deeper analysis or a second opinion.
+Use Oracle ONLY when the user explicitly asks for review, comparison, or trade-off analysis. Oracle reads code and provides recommendations but does NOT write or modify code.
 
-WHEN TO USE:
-- Code reviews and architecture decisions
-- Complex debugging after failed attempts
-- Planning implementations and refactoring
-- Understanding unfamiliar code patterns
-- Security or performance analysis
+Trigger phrases: "should I use", "review this", "what are the trade-offs", "compare", "analyze", "which approach"
 
-WHEN NOT TO USE:
-- Simple file searches (use Grep/Finder)
-- Bulk code execution (use Task)
-- First attempt at any fix (try yourself first)`,
+Examples:
+- "Should I use Redis or Memcached for this caching layer?"
+- "Review this auth implementation for security issues"
+- "Compare these two database schemas"
+- "What are the trade-offs of microservices vs monolith here?"
+
+Do NOT use Oracle to validate your own decisions - just implement with Task.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -214,21 +206,18 @@ WHEN NOT TO USE:
 export const painterTool: Tool = {
   spec: {
     name: "Painter",
-    description: `Frontend development specialist for UI/UX implementation.
+    description: `Frontend and design specialist for UI/UX implementation.
 
-Use this for frontend-specific tasks that require knowledge of modern web technologies, UI patterns, and responsive design.
+Use Painter for any work involving visual interfaces, components, styling, or user experience. Painter understands React, Vue, Svelte, CSS, Tailwind, accessibility, and responsive design.
 
-WHEN TO USE:
-- Implementing or modifying React/Vue/Svelte components
-- CSS/styling work (Tailwind, CSS-in-JS, etc.)
-- Responsive design implementation
-- Accessibility improvements
-- Frontend performance optimization
+Examples:
+- "Build a settings page with dark mode toggle"
+- "Add form validation with inline error messages"
+- "Make the dashboard responsive for mobile"
+- "Create a reusable Modal component with animations"
+- "Fix the accessibility issues in the navigation menu"
 
-WHEN NOT TO USE:
-- Backend logic or API work (use Task)
-- Architecture decisions (use Oracle)
-- Code search only (use Finder)`,
+For backend/API work, use Task instead.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -277,21 +266,16 @@ WHEN NOT TO USE:
 export const librarianTool: Tool = {
   spec: {
     name: "Librarian",
-    description: `Codebase understanding agent for exploring repositories and documentation.
+    description: `External repository explorer for GitHub/GitLab URLs.
 
-Use this for thorough analysis of code, finding implementations, and understanding architectural patterns.
+Use Librarian ONLY when the user provides a GitHub or GitLab URL to explore. Librarian can clone, read, and analyze external repositories.
 
-WHEN TO USE:
-- Exploring unfamiliar repositories
-- Understanding how features work end-to-end
-- Finding documentation or code examples
-- Tracing code flow across modules
-- Comparing implementations across repos
+Examples:
+- "Explore https://github.com/anthropics/anthropic-sdk-python and explain the streaming API"
+- "How does https://github.com/vercel/next.js handle routing?"
+- "Find authentication examples in https://gitlab.com/org/project"
 
-WHEN NOT TO USE:
-- Making code changes (use Task/Painter)
-- Simple searches (use Grep/Finder)
-- Architecture decisions (use Oracle)`,
+For local codebase work, use Finder (search) or Task (implementation) instead.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -345,24 +329,19 @@ WHEN NOT TO USE:
 export const krakenTool: Tool = {
   spec: {
     name: "Kraken",
-    description: `Bulk code transformation agent for large-scale changes across many files.
+    description: `Bulk transformation agent for large-scale changes across 10+ files.
 
-Use this for mass migrations, renames, or pattern-wide changes that affect multiple files.
+Use Kraken when you need to apply the SAME type of change to many files: renames, API migrations, pattern replacements, or codebase-wide refactors.
 
-WHEN TO USE:
-- Renaming a function/class across the entire codebase
-- Migrating from one API to another
-- Applying a pattern change to many files
-- Bulk refactoring operations
+Examples:
+- "Rename getUserById to fetchUser across the entire codebase"
+- "Migrate all fetch() calls to use the new HttpClient"
+- "Replace console.log with the Logger utility everywhere"
+- "Update all React class components to functional components"
 
-WHEN NOT TO USE:
-- Changes to a single file (use Task)
-- Exploratory work (use Finder)
-- Frontend-specific changes (use Painter)
+Kraken works in two phases: first scoping affected files, then applying changes.
 
-The Kraken operates in two phases:
-1. Scope: Identifies all files that need modification
-2. Execute: Applies changes to each file`,
+For changes to fewer than 10 files, use Task instead.`,
     inputSchema: {
       type: "object",
       properties: {

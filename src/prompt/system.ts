@@ -62,6 +62,12 @@ export async function buildSystemPrompt(context: PromptContext): Promise<string>
 3. Use Grep to search file contents
 4. Read files to understand context
 
+## Subagent Tools
+When using subagent tools (Task, Finder, Oracle, Painter, Librarian, Kraken):
+- Provide a clear, human-readable description of what you're asking
+- Keep descriptions brief (under 100 characters) but informative
+- Example: "Find all authentication middleware" not "search auth"
+
 # Verification
 After making changes:
 1. Run typecheck/lint if available

@@ -1,0 +1,64 @@
+{
+  "timestamp": "2026-01-03T20:58:54.993Z",
+  "results": [
+    {
+      "testName": "Code Search - Should use Finder",
+      "prompt": "Find all places in this codebase where authentication tokens are validated",
+      "expectedAgentType": "finder",
+      "actualAgentType": null,
+      "invokedCorrectly": false,
+      "debugEvents": [],
+      "mainAgentToolCalls": [
+        "finder"
+      ],
+      "success": true
+    },
+    {
+      "testName": "Architecture Question - Should use Oracle",
+      "prompt": "Analyze the architecture of the permission system in this codebase and recommend improvements for security",
+      "expectedAgentType": "oracle",
+      "actualAgentType": null,
+      "invokedCorrectly": false,
+      "debugEvents": [],
+      "mainAgentToolCalls": [
+        "finder",
+        "oracle",
+        "oracle"
+      ],
+      "success": true
+    },
+    {
+      "testName": "Multi-file Implementation - Should use Task",
+      "prompt": "Create a new tool called 'calculator' that can perform basic math operations. Add it to the tools directory with proper exports.",
+      "expectedAgentType": "task",
+      "actualAgentType": null,
+      "invokedCorrectly": false,
+      "debugEvents": [],
+      "mainAgentToolCalls": [],
+      "success": true
+    },
+    {
+      "testName": "Codebase Exploration - Should use Librarian",
+      "prompt": "Explore how the agent loop works end-to-end from receiving a user message to generating a response",
+      "expectedAgentType": "librarian",
+      "actualAgentType": null,
+      "invokedCorrectly": false,
+      "debugEvents": [],
+      "mainAgentToolCalls": [
+        "librarian",
+        "finder"
+      ],
+      "success": true
+    },
+    {
+      "testName": "Simple Direct Task - Should NOT use sub-agent",
+      "prompt": "Read the package.json file and tell me what the project name is",
+      "expectedAgentType": "none",
+      "actualAgentType": null,
+      "invokedCorrectly": false,
+      "debugEvents": [],
+      "mainAgentToolCalls": [],
+      "success": true
+    }
+  ]
+}

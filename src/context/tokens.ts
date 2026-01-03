@@ -16,6 +16,9 @@ export function estimateContentBlockTokens(block: ContentBlock): number {
   if (block.type === "tool_result") {
     return estimateTokens(block.content)
   }
+  if (block.type === "summary") {
+    return estimateTokens(block.summary)
+  }
   return 0
 }
 
